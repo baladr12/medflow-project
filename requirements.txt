@@ -1,0 +1,27 @@
+# --- Google Cloud & AI SDKs ---
+# Gemini 2.0 SDK (The Brain)
+google-genai>=0.8.0
+# Vertex AI Platform SDK (The Engine)
+# Using [reasoningengine] ensures all ADK dependencies are included
+google-cloud-aiplatform[reasoningengine,preview]
+# For the Observability Manager & Cloud Operations
+google-cloud-logging
+# For EHR Persistence (BigQuery)
+google-cloud-bigquery
+# For Memory Storage (GCS)
+google-cloud-storage
+# For secure authentication
+google-auth
+
+# --- Core Framework & Validation ---
+pydantic
+python-dotenv
+
+# --- Concurrency & Networking ---
+# Essential for gevent worker class in custom environments
+gevent>=24.10.1
+greenlet
+
+# --- Frontend (Optional - for Demo UI) ---
+streamlit
+requests
