@@ -19,8 +19,8 @@ python-dotenv
 
 # --- Concurrency & Networking ---
 # Essential for gevent worker class in custom environments
-gevent>=24.10.1
-greenlet
+#gevent>=24.10.1
+#greenlet
 
 # --- Frontend (Optional - for Demo UI) ---
 streamlit
