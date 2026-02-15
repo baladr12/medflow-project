@@ -107,8 +107,8 @@ class MedFlowReasoningEngine:
             self.mem_store.blob_name = f"memory/{patient_id}.json"
             history = self.mem_store.load() 
             
-            # Extract previous state (Default to routine)
-            prev_priority = history.get("last_triage_level", "routine")
+            # Standardize the string to prevent "Emergency" vs "emergency" mismatches
+            prev_priority = str(history.get("last_triage_level", "routine")).lower().strip()
             
             # DEBUG 1: Verify load
             print(f"DEBUG: Memory for {patient_id} loaded. Value: {prev_priority}")
