@@ -4,9 +4,28 @@ on:
   push:
     branches:
       - main
+  # Allows you to trigger deployment manually from the Actions tab
+  workflow_dispatch:
 
 jobs:
+  lint:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install Linting Tools
+        run: pip install flake8
+      - name: Run Linter
+        # This catches syntax errors, undefined names, and cold-path bugs
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
   deploy-engine:
+    name: Vertex AI Engine Deployment
+    needs: lint  # Only deploy if the linter passes
     runs-on: ubuntu-latest
 
     steps:
@@ -14,9 +33,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip' # Speeds up subsequent runs by caching dependencies
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -30,12 +50,14 @@ jobs:
 
       - name: Run Deployment Script
         env:
-          GCP_PROJECT_ID: "medflow-prod-486618"
-          GCP_LOCATION: "us-central1"
-          GCP_SERVICE_ACCOUNT: "medflow-ai-runner@medflow-prod-486618.iam.gserviceaccount.com"
-          GCS_MEMORY_BUCKET: "medflow-memory-486618"
+          # Use Secrets for security and environment flexibility
+          GCP_PROJECT_ID: "${{ secrets.GCP_PROJECT_ID }}"
+          GCP_LOCATION: "${{ secrets.GCP_LOCATION }}"
+          GCS_MEMORY_BUCKET: "${{ secrets.GCS_MEMORY_BUCKET }}"
+          # You can keep these as env vars or move to secrets if they vary by branch
           BQ_DATASET_ID: "clinical_records"
           BQ_TABLE_ID: "triage_cases"
           GEMINI_MODEL: "gemini-2.0-flash"
         run: |
+          # We call engine.py which contains your reasoning_engines.ReasoningEngine.create logic
           python engine.py

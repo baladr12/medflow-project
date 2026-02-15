@@ -10,11 +10,10 @@ load_dotenv()
 class MedFlowReasoningEngine:
     """
     MedFlow v21: Enterprise Clinical Reasoning Engine.
-    Features: 7-Agent Orchestration, Dynamic Triage Advice, and BQ Persistence.
+    Features: 7-Agent Orchestration, Observability, and Patient Isolation.
     """
 
     def __init__(self):
-        # Placeholders injected during deployment
         self.project = None
         self.location = "us-central1"
         self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
@@ -24,16 +23,17 @@ class MedFlowReasoningEngine:
         
         # Object placeholders
         self.client = None
+        self.obs = None
         self.intake = None
         self.triage = None
         self.summary = None
         self.workflow = None
         self.memory = None
-        self.followup = None
-        self.evaluator = None
+        self.ehr = None
+        self.mem_store = None
 
     def _setup(self):
-        """Forces injected variables into cloud environment before SDK initialization."""
+        """Initializes agents and observability in the cloud environment."""
         if self.client is not None:
             return
 
@@ -41,24 +41,23 @@ class MedFlowReasoningEngine:
         if self.project:
             os.environ["GCP_PROJECT_ID"] = self.project
             os.environ["GOOGLE_CLOUD_PROJECT"] = self.project
-        if self.location:
-            os.environ["GCP_LOCATION"] = self.location
 
         from google import genai
         from google.auth import default
         
+        # Internal imports for Reasoning Engine compatibility
         from agents.patient_understanding import PatientUnderstandingAgent
         from agents.clinical_triage import ClinicalTriageAgent
         from agents.clinical_summary import ClinicalSummaryAgent
         from agents.workflow_automation import WorkflowAutomationAgent
-        from agents.followup_agent import FollowUpAgent
-        from agents.evaluation_agent import EvaluationAgent
         from memory.memory_agent import MemoryAgent
         from tools.ehr_store import EHRStore
         from memory.memory_store import MemoryStore
+        from observability.manager import ObservabilityManager
 
-        # 1. Initialize Google GenAI Client
+        # 1. Initialize Observability & GenAI
         credentials, _ = default()
+        self.obs = ObservabilityManager(name="medflow-engine")
         self.client = genai.Client(
             vertexai=True,
             project=self.project,
@@ -66,41 +65,25 @@ class MedFlowReasoningEngine:
             credentials=credentials
         )
 
-        # 2. Initialize Tools & Memory
+        # 2. Initialize Tools & Team
         self.ehr = EHRStore()         
         self.mem_store = MemoryStore()
-
-        # 3. Initialize the 7-Agent Team
+        
         self.intake = PatientUnderstandingAgent(self.client)
         self.triage = ClinicalTriageAgent(self.client)
         self.summary = ClinicalSummaryAgent(self.client)
         self.workflow = WorkflowAutomationAgent(self.ehr)
         self.memory = MemoryAgent(self.client, self.mem_store)
-        self.followup = FollowUpAgent(self.client)
-        self.evaluator = EvaluationAgent(self.client)
         
-        # 4. Sync Cloud Infrastructure (Ensures BQ Table exists)
         self._initialize_infrastructure()
 
     def _initialize_infrastructure(self):
-        """Sets up BigQuery with the correct 6-column schema."""
+        """Ensures GCP resources exist."""
         from google.cloud import storage, bigquery
         from google.api_core import exceptions
 
-        if not self.project:
-            return
+        if not self.project: return
 
-        # 1. Storage Check
-        storage_client = storage.Client(project=self.project)
-        if self.bucket_name:
-            bucket = storage_client.bucket(self.bucket_name)
-            try:
-                if not bucket.exists():
-                    storage_client.create_bucket(bucket, location=self.location)
-            except Exception:
-                pass 
-
-        # 2. BigQuery Dataset Check
         bq_client = bigquery.Client(project=self.project)
         full_dataset_id = f"{self.project}.{self.dataset_id}"
         
@@ -111,61 +94,60 @@ class MedFlowReasoningEngine:
             dataset.location = self.location
             bq_client.create_dataset(dataset, timeout=30)
 
-        # 3. BigQuery Table Check - 6 Column Schema for EHRStore compatibility
-        full_table_id = f"{full_dataset_id}.{self.table_id}"
-        try:
-            bq_client.get_table(full_table_id)
-        except exceptions.NotFound:
-            schema = [
-                bigquery.SchemaField("case_id", "STRING", mode="REQUIRED"),
-                bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
-                bigquery.SchemaField("patient_summary", "STRING"), 
-                bigquery.SchemaField("triage_level", "STRING"),
-                bigquery.SchemaField("soap_note", "STRING"),      
-                bigquery.SchemaField("integrity_hash", "STRING"), 
-            ]
-            table = bigquery.Table(full_table_id, schema=schema)
-            bq_client.create_table(table)
-
-    def query(self, message: str, consent: bool = False):
-        """Main cloud execution point with dynamic advice injection."""
+    def query(self, message: str, consent: bool = False, patient_id: str = "anonymous"):
+        """Main cloud execution point with observability and patient isolation."""
         self._setup()
-        start_time = datetime.now(timezone.utc)
+        
+        # Start observability context
+        trace_id = self.obs.start_request()
+        start_timer = self.obs.start_timer()
 
         try:
-            # 1. Extraction & Decision
+            # --- PATIENT CONTEXT SWITCH ---
+            # Switch the "context" of the memory store to this patient
+            self.mem_store.blob_name = f"memory/{patient_id}.json"
+            self.obs.add_trace("MemoryStore", f"Context switched to patient: {patient_id}")
+            # ------------------------------
+
+            # 1. Extraction
+            self.obs.add_trace("IntakeAgent", "Analyzing clinical input")
             raw_data = self.intake.analyse(message)
+            
+            # 2. Triage
+            self.obs.add_trace("TriageAgent", "Calculating priority")
             triage_results = self.triage.triage(raw_data)
             
-            # 2. Summary Generation
+            # 3. Summary
+            self.obs.add_trace("SummaryAgent", "Synthesizing SOAP note")
             clinician_summary = self.summary.create_summary(raw_data, triage_results)
             
-            # 3. Workflow Automation (Persistence)
+            # 4. Persistence
             workflow_outcome = "Logged"
             if consent:
+                self.obs.add_trace("WorkflowAgent", "Persisting to EHR")
                 prepared_case = self.workflow.prepare_case(raw_data, triage_results, clinician_summary)
                 save_result = self.workflow.confirm_and_save(prepared_case, consent=True)
                 workflow_outcome = save_result.get("status", "Saved")
-                if workflow_outcome == "failed":
-                    workflow_outcome = f"Error: {save_result.get('message')}"
 
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+            latency = self.obs.stop_timer(start_timer)
+            self.obs.info("Inference complete", extra={"latency": latency, "patient": patient_id})
 
             return {
                 "triage": triage_results,
                 "clinical_summary": clinician_summary,
-                # DYNAMIC ADVICE: Pulls directly from the Triage Agent's specific recommendation
                 "follow_up": {
                     "safety_net_advice": triage_results.get('action', 'Seek medical review if symptoms persist.')
                 },
                 "workflow_status": workflow_outcome,
                 "metadata": {
-                    "latency": f"{round(duration, 2)}s",
-                    "engine": "MedFlow-ADK-v21-Production",
+                    "latency": f"{latency}s",
+                    "trace_id": trace_id,
+                    "patient_id": patient_id,
                     "model": self.model_name
                 }
             }
         except Exception as e:
+            self.obs.error(f"Pipeline Error: {str(e)}")
             return {"status": "error", "message": f"Cloud Pipeline Error: {str(e)}"}
 
 # --- DEPLOYMENT SCRIPT ---
@@ -173,23 +155,18 @@ if __name__ == "__main__":
     PROJECT_ID = os.getenv("GCP_PROJECT_ID")
     LOCATION = os.getenv("GCP_LOCATION", "us-central1")
     STAGING_BUCKET = os.getenv("GCS_MEMORY_BUCKET")
-    MODEL_ID = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
     if not PROJECT_ID or not STAGING_BUCKET:
-        print("❌ Error: Missing GCP_PROJECT_ID or GCS_MEMORY_BUCKET in .env")
+        print("❌ Error: Missing GCP_PROJECT_ID or GCS_MEMORY_BUCKET")
         exit(1)
 
     vertexai.init(project=PROJECT_ID, location=LOCATION, staging_bucket=f"gs://{STAGING_BUCKET}")
 
     engine_instance = MedFlowReasoningEngine()
     engine_instance.project = PROJECT_ID
-    engine_instance.location = LOCATION
-    engine_instance.model_name = MODEL_ID
     engine_instance.bucket_name = STAGING_BUCKET
-    engine_instance.dataset_id = os.getenv("BQ_DATASET_ID", "clinical_records")
-    engine_instance.table_id = os.getenv("BQ_TABLE_ID", "triage_cases")
 
-    print(f"🚀 Deploying MedFlow v21 to {PROJECT_ID}...")
+    print(f"🚀 Deploying MedFlow v21...")
 
     try:
         remote_app = reasoning_engines.ReasoningEngine.create(
@@ -199,13 +176,12 @@ if __name__ == "__main__":
                 "google-cloud-aiplatform[reasoningengine,preview]",
                 "google-cloud-bigquery",
                 "google-cloud-storage",
+                "google-cloud-logging",
                 "python-dotenv",
             ],
             display_name="MedFlow_Clinical_Engine_v21",
-            extra_packages=["agents", "tools", "memory"],
+            extra_packages=["agents", "tools", "memory", "observability"],
         )
-
-        print(f"\n✅ Deployment Complete! ID: {remote_app.resource_name}")
-
+        print(f"✅ Deployed: {remote_app.resource_name}")
     except Exception as e:
-        print(f"\n❌ Deployment Failed: {str(e)}")
+        print(f"❌ Failed: {str(e)}")

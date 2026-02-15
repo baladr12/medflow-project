@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import uuid
 import vertexai
 from vertexai.preview import reasoning_engines
 from dotenv import load_dotenv
@@ -9,6 +10,10 @@ load_dotenv()
 
 # --- THEMEING & UI CONFIG ---
 st.set_page_config(page_title="MedFlow AI", layout="wide")
+
+# Persistent Patient ID for the session (No Login Required)
+if "patient_id" not in st.session_state:
+    st.session_state.patient_id = f"TEMP-{uuid.uuid4().hex[:8].upper()}"
 
 st.markdown("""
     <style>
@@ -47,7 +52,7 @@ def load_latest_engine():
         executable_engine = reasoning_engines.ReasoningEngine(latest_resource.resource_name)
         
         st.sidebar.success(f"Connected: {latest_resource.display_name}")
-        st.sidebar.caption(f"ID: ...{latest_resource.resource_name[-6:]}")
+        st.sidebar.caption(f"Patient Session: {st.session_state.patient_id}")
         return executable_engine
     except Exception as e:
         st.error(f"Discovery Error: {str(e)}")
@@ -71,7 +76,12 @@ if prompt := st.chat_input("How are you feeling today?"):
         
         if engine:
             try:
-                response = engine.query(message=prompt, consent=True)
+                # UPDATED: Passing the temporary patient_id to the engine
+                response = engine.query(
+                    message=prompt, 
+                    consent=True, 
+                    patient_id=st.session_state.patient_id
+                )
                 
                 with st.chat_message("assistant"):
                     # 1. Triage Priority Header
@@ -85,7 +95,6 @@ if prompt := st.chat_input("How are you feeling today?"):
 
                     # 2. Structured Clinical Report
                     summary_data = response.get('clinical_summary', {})
-                    
                     st.markdown(f"#### Chief Complaint: {summary_data.get('chief_complaint', 'N/A')}")
                     
                     with st.container():
@@ -114,9 +123,9 @@ if prompt := st.chat_input("How are you feeling today?"):
                     st.warning(f"**Immediate Action Required:** {advice}")
                     
                     # 4. Metadata & Status
-                    st.caption(f"Workflow Status: {response.get('workflow_status')} | Latency: {response.get('metadata', {}).get('latency')}")
+                    st.caption(f"Status: {response.get('workflow_status')} | Latency: {response.get('metadata', {}).get('latency')} | Trace: {response.get('metadata', {}).get('trace_id')}")
 
-                    # 5. Developer Debugging (Hidden by default)
+                    # 5. Developer Debugging
                     with st.expander("🔍 Raw Agent Response Data"):
                         st.json(response)
 
@@ -132,4 +141,6 @@ with st.sidebar:
     st.header("MedFlow Controls")
     if st.button("Clear Chat Session"):
         st.session_state.messages = []
+        # Reset ID on clear to simulate a new patient
+        st.session_state.patient_id = f"TEMP-{uuid.uuid4().hex[:8].upper()}"
         st.rerun()
