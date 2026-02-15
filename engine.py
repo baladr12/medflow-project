@@ -14,6 +14,7 @@ class MedFlowReasoningEngine:
     """
 
     def __init__(self):
+        # Configuration pulled from deployment or env
         self.project = os.getenv("GCP_PROJECT_ID")
         self.location = os.getenv("GCP_LOCATION", "us-central1")
         self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
@@ -37,6 +38,7 @@ class MedFlowReasoningEngine:
         if self.client is not None:
             return
 
+        # Ensure project variables are set in the environment for GCS/BQ clients
         if self.project:
             os.environ["GCP_PROJECT_ID"] = self.project
             os.environ["GOOGLE_CLOUD_PROJECT"] = self.project
@@ -101,36 +103,45 @@ class MedFlowReasoningEngine:
         start_timer = self.obs.start_timer()
 
         try:
-            # 1. LOAD PATIENT HISTORY
+            # 1. LOAD PATIENT HISTORY (Memory Retrieval)
             self.mem_store.blob_name = f"memory/{patient_id}.json"
             history = self.mem_store.load() 
             
             # Extract previous state (Default to routine)
             prev_priority = history.get("last_triage_level", "routine")
+            
+            # DEBUG 1: Verify load
+            print(f"DEBUG: Memory for {patient_id} loaded. Value: {prev_priority}")
             self.obs.add_trace("MemoryStore", f"Patient: {patient_id} | Memory Load: {prev_priority}")
 
-            # 2. EXTRACTION
+            # 2. EXTRACTION (IntakeAgent)
             self.obs.add_trace("IntakeAgent", "Analyzing clinical input")
             extracted_data = self.intake.analyse(message)
             
             # --- THE AGGRESSIVE INJECTION ---
-            # We create a final payload that COMBINES extraction + memory
-            # This ensures 'previous_priority' is at the top level of the dict
+            # Create a combined payload to ensure memory is never lost
             triage_payload = {**extracted_data} 
             triage_payload["previous_priority"] = prev_priority
             
-            # 3. TRIAGE (Now impossible to miss the context)
+            # 3. TRIAGE (ClinicalTriageAgent)
+            # This now receives the payload with "previous_priority"
             self.obs.add_trace("TriageAgent", f"Calculating priority (Context: {prev_priority})")
             triage_results = self.triage.triage(triage_payload)
+            new_level = triage_results.get("level", "routine")
             
-            # 4. SUMMARY
+            # 4. SUMMARY (ClinicalSummaryAgent)
             self.obs.add_trace("SummaryAgent", "Synthesizing clinical note")
             clinician_summary = self.summary.create_summary(triage_payload, triage_results)
             
             # 5. PERSISTENCE & MEMORY UPDATE
-            # Save the NEW priority to GCS for the NEXT turn
-            history["last_triage_level"] = triage_results.get("level", "routine")
+            # DEBUG 2: Verify save intent
+            history["last_triage_level"] = new_level
+            print(f"DEBUG: Attempting to save {new_level} to {self.mem_store.blob_name}")
             self.mem_store.save(history) 
+
+            # DEBUG 3: Verification Load
+            verify_history = self.mem_store.load()
+            print(f"DEBUG: Immediate verification load: {verify_history.get('last_triage_level')}")
 
             workflow_outcome = "Logged"
             if consent:
@@ -145,7 +156,7 @@ class MedFlowReasoningEngine:
                 "triage": triage_results,
                 "clinical_summary": clinician_summary,
                 "follow_up": {
-                    "safety_net_advice": triage_results.get('action', 'Seek medical review.')
+                    "safety_net_advice": triage_results.get('action', 'Seek medical review if symptoms persist.')
                 },
                 "workflow_status": workflow_outcome,
                 "metadata": {
@@ -170,17 +181,13 @@ if __name__ == "__main__":
         print("❌ Error: Missing GCP_PROJECT_ID or GCS_MEMORY_BUCKET in .env")
         exit(1)
 
-    # 2. Initialize Vertex AI for the deployment process
+    # 2. Initialize Vertex AI
     vertexai.init(project=PROJECT_ID, location=LOCATION, staging_bucket=f"gs://{STAGING_BUCKET}")
 
-    # 3. Create the instance
+    # 3. Create and configure instance
     engine_instance = MedFlowReasoningEngine()
-    
-    # --- ADD THESE TWO LINES HERE ---
-    # This "passes" your local env vars into the cloud instance object
     engine_instance.project = PROJECT_ID
     engine_instance.bucket_name = STAGING_BUCKET
-    # --------------------------------
 
     print(f"🚀 Deploying MedFlow v21 to {PROJECT_ID}...")
 
