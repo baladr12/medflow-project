@@ -10,10 +10,7 @@ load_dotenv()
 class MedFlowReasoningEngine:
     """
     MedFlow v21: Enterprise Clinical Reasoning Engine.
-    Features: 
-    - Environment Hot-Patching for Google GenAI SDK
-    - Idempotent Infrastructure (Auto-handles existing BQ/GCS)
-    - Dynamic Model Loading via .env
+    Updated with expanded BigQuery Schema to match EHRStore requirements.
     """
 
     def __init__(self):
@@ -51,7 +48,6 @@ class MedFlowReasoningEngine:
         from google import genai
         from google.auth import default
         
-        # Lazy-import agents for lightweight pickling
         from agents.patient_understanding import PatientUnderstandingAgent
         from agents.clinical_triage import ClinicalTriageAgent
         from agents.clinical_summary import ClinicalSummaryAgent
@@ -76,7 +72,6 @@ class MedFlowReasoningEngine:
         self.mem_store = MemoryStore()
 
         # 3. Initialize the 7-Agent Team
-        # We pass self.model_name to agents if they need to know the specific model
         self.intake = PatientUnderstandingAgent(self.client)
         self.triage = ClinicalTriageAgent(self.client)
         self.summary = ClinicalSummaryAgent(self.client)
@@ -89,7 +84,7 @@ class MedFlowReasoningEngine:
         self._initialize_infrastructure()
 
     def _initialize_infrastructure(self):
-        """Sets up GCS and BigQuery. Skips if already exists to prevent 409/403 errors."""
+        """Sets up GCS and BigQuery with the correct multi-column schema."""
         from google.cloud import storage, bigquery
         from google.api_core import exceptions
 
@@ -106,7 +101,7 @@ class MedFlowReasoningEngine:
             except Exception:
                 pass 
 
-        # 2. BigQuery Dataset Check (Explicit Full Path)
+        # 2. BigQuery Dataset Check
         bq_client = bigquery.Client(project=self.project)
         full_dataset_id = f"{self.project}.{self.dataset_id}"
         
@@ -117,19 +112,21 @@ class MedFlowReasoningEngine:
             dataset.location = self.location
             bq_client.create_dataset(dataset, timeout=30)
         except exceptions.Forbidden:
-            # Proceed if we have write-only access or it already exists
             pass
 
-        # 3. BigQuery Table Check
+        # 3. BigQuery Table Check - UPDATED SCHEMA
         full_table_id = f"{full_dataset_id}.{self.table_id}"
         try:
             bq_client.get_table(full_table_id)
         except exceptions.NotFound:
+            # We add soap_note and integrity_hash to match what EHRStore sends
             schema = [
                 bigquery.SchemaField("case_id", "STRING", mode="REQUIRED"),
                 bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
-                bigquery.SchemaField("patient_summary", "STRING"),
+                bigquery.SchemaField("patient_summary", "STRING"), 
                 bigquery.SchemaField("triage_level", "STRING"),
+                bigquery.SchemaField("soap_note", "STRING"),      
+                bigquery.SchemaField("integrity_hash", "STRING"), 
             ]
             table = bigquery.Table(full_table_id, schema=schema)
             bq_client.create_table(table)
@@ -147,15 +144,15 @@ class MedFlowReasoningEngine:
             triage_results = self.triage.triage(raw_data)
             clinician_summary = self.summary.create_summary(raw_data, triage_results)
             
-            # Workflow: Log to BigQuery/EHR
+            # Workflow Automation
             workflow_outcome = "Logged"
             if consent:
-                try:
-                    prepared_case = self.workflow.prepare_case(raw_data, triage_results, clinician_summary)
-                    save_result = self.workflow.confirm_and_save(prepared_case, consent=True)
-                    workflow_outcome = save_result.get("status", "Saved to EHR")
-                except Exception as e:
-                    workflow_outcome = f"EHR Log Partial: {str(e)}"
+                # prepare_case creates the payload that ehr_store needs
+                prepared_case = self.workflow.prepare_case(raw_data, triage_results, clinician_summary)
+                save_result = self.workflow.confirm_and_save(prepared_case, consent=True)
+                workflow_outcome = save_result.get("status", "Saved")
+                if workflow_outcome == "failed":
+                    workflow_outcome = f"Error: {save_result.get('message')}"
 
             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
@@ -175,7 +172,6 @@ class MedFlowReasoningEngine:
 
 # --- DEPLOYMENT SCRIPT ---
 if __name__ == "__main__":
-    # 1. Fetch environment variables
     PROJECT_ID = os.getenv("GCP_PROJECT_ID")
     LOCATION = os.getenv("GCP_LOCATION", "us-central1")
     STAGING_BUCKET = os.getenv("GCS_MEMORY_BUCKET")
@@ -185,13 +181,9 @@ if __name__ == "__main__":
         print("❌ Error: Missing GCP_PROJECT_ID or GCS_MEMORY_BUCKET in .env")
         exit(1)
 
-    # Initialize Vertex AI for deployment
     vertexai.init(project=PROJECT_ID, location=LOCATION, staging_bucket=f"gs://{STAGING_BUCKET}")
 
-    # 2. Create and configure instance
     engine_instance = MedFlowReasoningEngine()
-    
-    # "Bake" values into the serialized object for cloud persistence
     engine_instance.project = PROJECT_ID
     engine_instance.location = LOCATION
     engine_instance.model_name = MODEL_ID
@@ -200,7 +192,6 @@ if __name__ == "__main__":
     engine_instance.table_id = os.getenv("BQ_TABLE_ID", "triage_cases")
 
     print(f"🚀 Deploying to {PROJECT_ID}...")
-    print(f"🧠 Model: {MODEL_ID}")
 
     try:
         remote_app = reasoning_engines.ReasoningEngine.create(
@@ -216,9 +207,7 @@ if __name__ == "__main__":
             extra_packages=["agents", "tools", "memory"],
         )
 
-        print(f"\n✅ Success! Engine Deployed.")
-        print(f"Resource ID: {remote_app.resource_name}")
-        print(f"Update your UI to use Auto-Discovery or this ID.")
+        print(f"\n✅ Deployment Complete! ID: {remote_app.resource_name}")
 
     except Exception as e:
         print(f"\n❌ Deployment Failed: {str(e)}")
