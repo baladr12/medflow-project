@@ -86,42 +86,47 @@ class MedFlowReasoningEngine:
         self._initialize_infrastructure()
 
     def _initialize_infrastructure(self):
-        """Setup GCS and BigQuery using injected state."""
         from google.cloud import storage, bigquery
+        from google.api_core import exceptions
 
         if not self.project:
             return
 
-        # Initialize Storage using project-explicit client
+        # 1. Storage Check
         storage_client = storage.Client(project=self.project)
         if self.bucket_name:
             bucket = storage_client.bucket(self.bucket_name)
             if not bucket.exists():
                 storage_client.create_bucket(bucket, location=self.location)
 
-        # Initialize BigQuery
+        # 2. BigQuery Dataset Check (The Fix)
         bq_client = bigquery.Client(project=self.project)
-        dataset_ref = bq_client.dataset(self.dataset_id)
+        dataset_id = f"{self.project}.{self.dataset_id}"
         
         try:
-            bq_client.get_dataset(dataset_ref)
-        except Exception:
-            dataset = bigquery.Dataset(dataset_ref)
+            bq_client.get_dataset(dataset_id)
+            print(f"Dataset {self.dataset_id} already exists.")
+        except exceptions.NotFound:
+            dataset = bigquery.Dataset(dataset_id)
             dataset.location = self.location
             bq_client.create_dataset(dataset, timeout=30)
+            print(f"Dataset {self.dataset_id} created.")
 
-        table_ref = dataset_ref.table(self.table_id)
+        # 3. BigQuery Table Check
+        table_id = f"{dataset_id}.{self.table_id}"
         try:
-            bq_client.get_table(table_ref)
-        except Exception:
+            bq_client.get_table(table_id)
+            print(f"Table {self.table_id} already exists.")
+        except exceptions.NotFound:
             schema = [
                 bigquery.SchemaField("case_id", "STRING", mode="REQUIRED"),
                 bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
                 bigquery.SchemaField("patient_summary", "STRING"),
                 bigquery.SchemaField("triage_level", "STRING"),
             ]
-            table = bigquery.Table(table_ref, schema=schema)
+            table = bigquery.Table(table_id, schema=schema)
             bq_client.create_table(table)
+            print(f"Table {self.table_id} created.")
 
     def query(self, message: str, consent: bool = False):
         """Main cloud execution point."""
