@@ -163,21 +163,21 @@ if __name__ == "__main__":
     LOCATION = os.getenv("GCP_LOCATION", "us-central1")
     STAGING_BUCKET = os.getenv("GCS_MEMORY_BUCKET")
 
-    if not PROJECT_ID or not STAGING_BUCKET:
-        print("❌ Error: Missing Env Vars (GCP_PROJECT_ID or GCS_MEMORY_BUCKET)")
-        exit(1)
+    vertexai.init(project=PROJECT_ID, location=LOCATION, staging_bucket=f"gs://{STAGING_BUCKET}")
 
-    vertexai.init(
-        project=PROJECT_ID, 
-        location=LOCATION, 
-        staging_bucket=f"gs://{STAGING_BUCKET}"
-    )
+    # 1. Create the local instance
+    engine_instance = MedFlowReasoningEngine()
 
-    print(f"🚀 Deploying MedFlow Engine to {PROJECT_ID}...")
+    # 2. Explicitly set the attributes so they are "pickled" with the object
+    engine_instance.project = PROJECT_ID
+    engine_instance.location = LOCATION
+    # (Add any other vars you need here)
+
+    print(f"🚀 Deploying MedFlow Engine...")
 
     try:
         remote_app = reasoning_engines.ReasoningEngine.create(
-            MedFlowReasoningEngine(),
+            engine_instance,  # Pass the instance we just modified
             requirements=[
                 "google-genai",
                 "google-cloud-aiplatform[reasoningengine,preview]",
@@ -187,20 +187,8 @@ if __name__ == "__main__":
             ],
             display_name="MedFlow_ADK_Clinical_Engine_v21",
             extra_packages=["agents", "tools", "memory"],
-            # --- THIS BLOCK FIXES THE FAILED PRECONDITION ERROR ---
-            env_vars={
-                "GCP_PROJECT_ID": PROJECT_ID,
-                "GCP_LOCATION": LOCATION,
-                "GCS_MEMORY_BUCKET": STAGING_BUCKET,
-                "GEMINI_MODEL": os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
-                "BQ_DATASET_ID": os.getenv("BQ_DATASET_ID", "clinical_records"),
-                "BQ_TABLE_ID": os.getenv("BQ_TABLE_ID", "triage_cases"),
-            }
-            # ------------------------------------------------------
+            # REMOVED: env_vars (to fix your error)
         )
-
-        print(f"\n✅ Deployment Complete!")
-        print(f"Engine Resource ID: {remote_app.resource_name}")
-
+        print(f"✅ Deployment Complete! ID: {remote_app.resource_name}")
     except Exception as e:
-        print(f"\n❌ Deployment Failed: {str(e)}")
+        print(f"❌ Deployment Failed: {str(e)}")
