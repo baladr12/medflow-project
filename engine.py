@@ -178,7 +178,15 @@ if __name__ == "__main__":
         exit(1)
 
     # Initialize with the project - it will use the credentials from the shell (GitHub Actions)
-    vertexai.init(project=PROJECT_ID, location=LOCATION)
+    # Pull the bucket name from your environment variables
+    STAGING_BUCKET = os.getenv("GCS_MEMORY_BUCKET")
+
+    # Add the staging_bucket argument here
+    vertexai.init(
+        project=PROJECT_ID, 
+        location=LOCATION, 
+        staging_bucket=f"gs://{STAGING_BUCKET}"
+    )
 
     print(f"🚀 Deploying MedFlow Engine to {PROJECT_ID}...")
 
