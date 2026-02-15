@@ -64,10 +64,11 @@ class ClinicalTriageAgent:
             result = json.loads(response.text)
 
             # --- THE FINAL GUARDRAIL (Python Level) ---
-            # If the rules say emergency but Gemini tried to downgrade, we force it back.
             if rule_result == "emergency" and result["level"] != "emergency":
                 result["level"] = "emergency"
                 result["reasoning"] = f"EMERGENCY LATCH: {result['reasoning']} (Priority maintained due to active emergency status in this session)."
+                # Add this line to ensure the action stays life-saving
+                result["action"] = "IMMEDIATE EMERGENCY ACTION REQUIRED: Call 911/EMS or proceed to the nearest Emergency Department immediately."
             
             return result
 

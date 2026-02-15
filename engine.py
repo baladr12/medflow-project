@@ -101,41 +101,41 @@ class MedFlowReasoningEngine:
         start_timer = self.obs.start_timer()
 
         try:
-            # 1. LOAD PATIENT HISTORY (Memory Retrieval)
+            # 1. LOAD PATIENT HISTORY
             self.mem_store.blob_name = f"memory/{patient_id}.json"
             history = self.mem_store.load() 
             
-            # Extract previous state
+            # Extract previous state (Default to routine)
             prev_priority = history.get("last_triage_level", "routine")
             self.obs.add_trace("MemoryStore", f"Patient: {patient_id} | Memory Load: {prev_priority}")
 
-            # 2. EXTRACTION (IntakeAgent)
+            # 2. EXTRACTION
             self.obs.add_trace("IntakeAgent", "Analyzing clinical input")
-            raw_data = self.intake.analyse(message)
+            extracted_data = self.intake.analyse(message)
             
-            # --- CRITICAL STEP: INJECT PREVIOUS PRIORITY INTO TRIAGE DATA ---
-            # This ensures triage_rules.py sees the 'sticky' status
-            raw_data["previous_priority"] = prev_priority
+            # --- THE AGGRESSIVE INJECTION ---
+            # We create a final payload that COMBINES extraction + memory
+            # This ensures 'previous_priority' is at the top level of the dict
+            triage_payload = {**extracted_data} 
+            triage_payload["previous_priority"] = prev_priority
             
-            # 3. TRIAGE (ClinicalTriageAgent)
-            # This now receives raw_data containing 'previous_priority'
+            # 3. TRIAGE (Now impossible to miss the context)
             self.obs.add_trace("TriageAgent", f"Calculating priority (Context: {prev_priority})")
-            triage_results = self.triage.triage(raw_data)
+            triage_results = self.triage.triage(triage_payload)
             
-            # 4. SUMMARY (ClinicalSummaryAgent)
+            # 4. SUMMARY
             self.obs.add_trace("SummaryAgent", "Synthesizing clinical note")
-            clinician_summary = self.summary.create_summary(raw_data, triage_results)
+            clinician_summary = self.summary.create_summary(triage_payload, triage_results)
             
             # 5. PERSISTENCE & MEMORY UPDATE
-            workflow_outcome = "Logged"
-            
-            # Update history state with the NEW priority level determined in this turn
+            # Save the NEW priority to GCS for the NEXT turn
             history["last_triage_level"] = triage_results.get("level", "routine")
             self.mem_store.save(history) 
 
+            workflow_outcome = "Logged"
             if consent:
                 self.obs.add_trace("WorkflowAgent", "Persisting to EHR")
-                prepared_case = self.workflow.prepare_case(raw_data, triage_results, clinician_summary)
+                prepared_case = self.workflow.prepare_case(triage_payload, triage_results, clinician_summary)
                 save_result = self.workflow.confirm_and_save(prepared_case, consent=True)
                 workflow_outcome = save_result.get("status", "Saved")
 
@@ -145,7 +145,7 @@ class MedFlowReasoningEngine:
                 "triage": triage_results,
                 "clinical_summary": clinician_summary,
                 "follow_up": {
-                    "safety_net_advice": triage_results.get('action', 'Seek medical review if symptoms persist.')
+                    "safety_net_advice": triage_results.get('action', 'Seek medical review.')
                 },
                 "workflow_status": workflow_outcome,
                 "metadata": {
