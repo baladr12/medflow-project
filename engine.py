@@ -183,7 +183,8 @@ if __name__ == "__main__":
     print(f"🚀 Deploying MedFlow Engine to {PROJECT_ID}...")
 
     try:
-        # We REMOVED the service_account argument from here to fix the TypeError
+        # We removed the service_account= line because the SDK handles 
+        # identity via vertexai.init() automatically.
         remote_app = reasoning_engines.ReasoningEngine.create(
             MedFlowReasoningEngine(),
             requirements=[
