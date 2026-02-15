@@ -6,6 +6,7 @@ class ClinicalTriageAgent:
     """
     Agent 2: Hybrid Clinical Triage.
     Combines deterministic rules with Gemini's clinical reasoning.
+    Now with Mandatory Latch for Emergency Status.
     """
 
     def __init__(self, client):
@@ -14,6 +15,7 @@ class ClinicalTriageAgent:
 
     def triage(self, structured_input: dict):
         # 1. Deterministic Rule-Based Check (Hard Guardrail)
+        # This will return 'emergency' if 'previous_priority' was 'emergency'
         rule_result = check_red_flags(structured_input)
 
         # 2. Define the Strict Response Schema
@@ -26,21 +28,26 @@ class ClinicalTriageAgent:
                 },
                 "reasoning": {"type": "STRING"},
                 "action": {"type": "STRING"},
-                "confidence_score": {"type": "NUMBER"} # Scale 0.0 to 1.0
+                "confidence_score": {"type": "NUMBER"}
             },
             "required": ["level", "reasoning", "action", "confidence_score"]
         }
 
+        # 3. Enhanced Instructions
+        # We tell the AI EXPLICITLY about the session history and the rule result.
         system_instruction = f"""
         You are a Clinical Triage Validator. 
-        Your task is to review patient symptoms and categorize the risk.
         
-        CRITICAL: A rule-based safety tool suggested: "{rule_result}". 
-        Favor this result unless the clinical context suggests a higher risk level. 
-        Never downgrade an 'emergency' or 'urgent' rating without extreme justification.
+        SAFETY MANDATE:
+        The safety tool has classified this session as: "{rule_result.upper()}".
+        
+        If the safety tool says 'emergency', you MUST return 'emergency'. 
+        This is because a life-threatening condition was identified earlier in this 
+        patient encounter (Sticky Priority). Even if the latest message seems minor, 
+        the patient is still in an active emergency state.
         """
 
-        prompt = f"PATIENT DATA: {json.dumps(structured_input)}"
+        prompt = f"NEW PATIENT DATA: {json.dumps(structured_input)}"
 
         try:
             response = self.client.models.generate_content(
@@ -50,14 +57,21 @@ class ClinicalTriageAgent:
                     system_instruction=system_instruction,
                     response_mime_type="application/json",
                     response_schema=triage_schema,
-                    temperature=0.1 
+                    temperature=0.0  # Zero temperature for maximum consistency
                 )
             )
 
-            return json.loads(response.text)
+            result = json.loads(response.text)
+
+            # --- THE FINAL GUARDRAIL (Python Level) ---
+            # If the rules say emergency but Gemini tried to downgrade, we force it back.
+            if rule_result == "emergency" and result["level"] != "emergency":
+                result["level"] = "emergency"
+                result["reasoning"] = f"EMERGENCY LATCH: {result['reasoning']} (Priority maintained due to active emergency status in this session)."
+            
+            return result
 
         except Exception as e:
-            # Emergency Fail-Safe
             return {
                 "level": rule_result if rule_result else "emergency",
                 "reasoning": f"Fail-safe triggered: {str(e)}",
