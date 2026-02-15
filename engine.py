@@ -8,8 +8,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class MedFlowReasoningEngine:
+    """
+    MedFlow v21: Enterprise Clinical Reasoning Engine.
+    Implements 'Environment Hot-Patching' to satisfy Google SDK requirements in cloud runtimes.
+    """
+
     def __init__(self):
-        # We define these; they will be filled by the injection script below
+        # Placeholders that will be injected during deployment
         self.project = None
         self.location = "us-central1"
         self.model_name = "gemini-2.0-flash"
@@ -17,7 +22,7 @@ class MedFlowReasoningEngine:
         self.dataset_id = "clinical_records"
         self.table_id = "triage_cases"
         
-        # Placeholders
+        # Object placeholders
         self.client = None
         self.intake = None
         self.triage = None
@@ -28,14 +33,23 @@ class MedFlowReasoningEngine:
         self.evaluator = None
 
     def _setup(self):
-        """Build clients using internal attributes, NOT os.getenv."""
+        """Forces injected variables into the cloud environment before SDK initialization."""
         if self.client is not None:
             return
+
+        import os
+        # CRITICAL: The Google GenAI SDK specifically looks at os.environ.
+        # We must manually populate these from our injected instance variables.
+        if self.project:
+            os.environ["GCP_PROJECT_ID"] = self.project
+            os.environ["GOOGLE_CLOUD_PROJECT"] = self.project
+        if self.location:
+            os.environ["GCP_LOCATION"] = self.location
 
         from google import genai
         from google.auth import default
         
-        # Local Agent Imports
+        # Lazy-import agents to keep the pickling lightweight
         from agents.patient_understanding import PatientUnderstandingAgent
         from agents.clinical_triage import ClinicalTriageAgent
         from agents.clinical_summary import ClinicalSummaryAgent
@@ -46,11 +60,7 @@ class MedFlowReasoningEngine:
         from tools.ehr_store import EHRStore
         from memory.memory_store import MemoryStore
 
-        # Validate that injection worked
-        if not self.project:
-            raise ValueError("Instance error: self.project is not set. Deployment injection failed.")
-
-        # 1. Initialize GenAI Client using THE INSTANCE ATTRIBUTE
+        # 1. Initialize Google GenAI Client
         credentials, _ = default()
         self.client = genai.Client(
             vertexai=True,
@@ -59,11 +69,11 @@ class MedFlowReasoningEngine:
             credentials=credentials
         )
 
-        # 2. Initialize Infrastructure
+        # 2. Initialize Tools & Memory
         self.ehr = EHRStore()         
         self.mem_store = MemoryStore()
 
-        # 3. Initialize Agents
+        # 3. Initialize the 7-Agent Team
         self.intake = PatientUnderstandingAgent(self.client)
         self.triage = ClinicalTriageAgent(self.client)
         self.summary = ClinicalSummaryAgent(self.client)
@@ -72,18 +82,24 @@ class MedFlowReasoningEngine:
         self.followup = FollowUpAgent(self.client)
         self.evaluator = EvaluationAgent(self.client)
         
+        # 4. Sync Cloud Infrastructure
         self._initialize_infrastructure()
 
     def _initialize_infrastructure(self):
+        """Setup GCS and BigQuery using injected state."""
         from google.cloud import storage, bigquery
 
-        # Use self.project directly
+        if not self.project:
+            return
+
+        # Initialize Storage using project-explicit client
         storage_client = storage.Client(project=self.project)
         if self.bucket_name:
             bucket = storage_client.bucket(self.bucket_name)
             if not bucket.exists():
                 storage_client.create_bucket(bucket, location=self.location)
 
+        # Initialize BigQuery
         bq_client = bigquery.Client(project=self.project)
         dataset_ref = bq_client.dataset(self.dataset_id)
         
@@ -92,7 +108,7 @@ class MedFlowReasoningEngine:
         except Exception:
             dataset = bigquery.Dataset(dataset_ref)
             dataset.location = self.location
-            bq_client.create_dataset(dataset)
+            bq_client.create_dataset(dataset, timeout=30)
 
         table_ref = dataset_ref.table(self.table_id)
         try:
@@ -108,49 +124,66 @@ class MedFlowReasoningEngine:
             bq_client.create_table(table)
 
     def query(self, message: str, consent: bool = False):
+        """Main cloud execution point."""
         self._setup()
         start_time = datetime.now(timezone.utc)
+
         try:
+            # Execute Pipeline
             raw_data = self.intake.analyse(message)
             triage_results = self.triage.triage(raw_data)
             clinician_summary = self.summary.create_summary(raw_data, triage_results)
             
-            # Simple metadata for UI
+            # Workflow check
+            workflow_outcome = "Pending"
+            if consent:
+                prepared_case = self.workflow.prepare_case(raw_data, triage_results, clinician_summary)
+                save_result = self.workflow.confirm_and_save(prepared_case, consent=True)
+                workflow_outcome = save_result.get("status", "Saved")
+
             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
             return {
                 "triage": triage_results,
                 "clinical_summary": clinician_summary,
-                "follow_up": {"safety_net_advice": "Consult a doctor immediately if symptoms worsen."},
-                "workflow_status": "Logged to EHR" if consent else "Pending",
-                "metadata": {"latency": f"{round(duration, 2)}s"}
+                "follow_up": {"safety_net_advice": "Seek immediate care if chest pain radiates or worsens."},
+                "workflow_status": workflow_outcome,
+                "metadata": {
+                    "latency": f"{round(duration, 2)}s",
+                    "engine": "MedFlow-ADK-v21-Production"
+                }
             }
         except Exception as e:
-            return {"status": "error", "message": f"Execution failed: {str(e)}"}
+            return {"status": "error", "message": f"Cloud Pipeline Error: {str(e)}"}
 
 # --- DEPLOYMENT SCRIPT ---
 if __name__ == "__main__":
-    PROJ = os.getenv("GCP_PROJECT_ID")
-    LOC = os.getenv("GCP_LOCATION", "us-central1")
-    BUCKET = os.getenv("GCS_MEMORY_BUCKET")
+    # 1. Fetch local environment variables
+    PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+    LOCATION = os.getenv("GCP_LOCATION", "us-central1")
+    STAGING_BUCKET = os.getenv("GCS_MEMORY_BUCKET")
 
-    vertexai.init(project=PROJ, location=LOC, staging_bucket=f"gs://{BUCKET}")
+    if not PROJECT_ID or not STAGING_BUCKET:
+        print("❌ Error: Missing environment variables for deployment.")
+        exit(1)
 
-    # Create instance
-    engine = MedFlowReasoningEngine()
+    vertexai.init(project=PROJECT_ID, location=LOCATION, staging_bucket=f"gs://{STAGING_BUCKET}")
 
-    # PHYSICAL INJECTION: Force these values into the object state
-    engine.project = PROJ
-    engine.location = LOC
-    engine.bucket_name = BUCKET
-    engine.dataset_id = os.getenv("BQ_DATASET_ID", "clinical_records")
-    engine.table_id = os.getenv("BQ_TABLE_ID", "triage_cases")
+    # 2. Create and Bundle the instance
+    engine_instance = MedFlowReasoningEngine()
+    
+    # This "bakes" the values into the serialized object
+    engine_instance.project = PROJECT_ID
+    engine_instance.location = LOCATION
+    engine_instance.bucket_name = STAGING_BUCKET
+    engine_instance.dataset_id = os.getenv("BQ_DATASET_ID", "clinical_records")
+    engine_instance.table_id = os.getenv("BQ_TABLE_ID", "triage_cases")
 
-    print("🚀 Deploying Engine with state-bundled configuration...")
+    print(f"🚀 Deploying to {PROJECT_ID} (with environment patching)...")
 
     try:
         remote_app = reasoning_engines.ReasoningEngine.create(
-            engine,
+            engine_instance,
             requirements=[
                 "google-genai",
                 "google-cloud-aiplatform[reasoningengine,preview]",
@@ -158,9 +191,12 @@ if __name__ == "__main__":
                 "google-cloud-storage",
                 "python-dotenv",
             ],
-            display_name="MedFlow_ADK_Clinical_Engine_v21",
+            display_name="MedFlow_Clinical_Engine_v21",
             extra_packages=["agents", "tools", "memory"],
         )
-        print(f"✅ Success! New ID: {remote_app.resource_name}")
+
+        print(f"\n✅ Success!")
+        print(f"Resource ID: {remote_app.resource_name}")
+
     except Exception as e:
-        print(f"❌ Failed: {str(e)}")
+        print(f"\n❌ Deployment Failed: {str(e)}")
