@@ -89,34 +89,30 @@ class MedFlowReasoningEngine:
         from google.cloud import storage, bigquery
         from google.api_core import exceptions
 
-        if not self.project:
-            return
-
-        # 1. Storage Check
+        # 1. Initialize Clients with EXPLICIT project IDs
+        # This prevents the SDK from guessing the wrong project in the cloud
         storage_client = storage.Client(project=self.project)
-        if self.bucket_name:
-            bucket = storage_client.bucket(self.bucket_name)
-            if not bucket.exists():
-                storage_client.create_bucket(bucket, location=self.location)
-
-        # 2. BigQuery Dataset Check (The Fix)
         bq_client = bigquery.Client(project=self.project)
-        dataset_id = f"{self.project}.{self.dataset_id}"
-        
+
+        # 2. Use the "Project.Dataset" format for absolute clarity
+        # This solves the "Access Denied" caused by project-guessing
+        full_dataset_id = f"{self.project}.{self.dataset_id}"
+
         try:
-            bq_client.get_dataset(dataset_id)
-            print(f"Dataset {self.dataset_id} already exists.")
+            # Try to get it with the explicit full path
+            bq_client.get_dataset(full_dataset_id)
         except exceptions.NotFound:
-            dataset = bigquery.Dataset(dataset_id)
+            dataset = bigquery.Dataset(full_dataset_id)
             dataset.location = self.location
             bq_client.create_dataset(dataset, timeout=30)
-            print(f"Dataset {self.dataset_id} created.")
+        except exceptions.Forbidden as e:
+            # If we still get a 403, we need to know exactly why
+            raise Exception(f"IAM is correct, but BQ rejected the request. Details: {str(e)}")
 
-        # 3. BigQuery Table Check
-        table_id = f"{dataset_id}.{self.table_id}"
+        # 3. Table Check
+        full_table_id = f"{full_dataset_id}.{self.table_id}"
         try:
-            bq_client.get_table(table_id)
-            print(f"Table {self.table_id} already exists.")
+            bq_client.get_table(full_table_id)
         except exceptions.NotFound:
             schema = [
                 bigquery.SchemaField("case_id", "STRING", mode="REQUIRED"),
@@ -124,9 +120,8 @@ class MedFlowReasoningEngine:
                 bigquery.SchemaField("patient_summary", "STRING"),
                 bigquery.SchemaField("triage_level", "STRING"),
             ]
-            table = bigquery.Table(table_id, schema=schema)
+            table = bigquery.Table(full_table_id, schema=schema)
             bq_client.create_table(table)
-            print(f"Table {self.table_id} created.")
 
     def query(self, message: str, consent: bool = False):
         """Main cloud execution point."""
