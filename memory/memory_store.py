@@ -6,59 +6,64 @@ from google.api_core import exceptions
 class MemoryStore:
     """
     Cloud-based memory store using Google Cloud Storage.
-    Persists long-term patient context across sessions with flexible blob naming.
+    Uses environment variables for project and bucket configuration.
     """
 
     def __init__(self):
-        # Pull bucket name from Env Vars
+        # Dynamically pull from Environment
+        self.project_id = os.getenv("GCP_PROJECT_ID")
         self.bucket_name = os.getenv("GCS_MEMORY_BUCKET")
         
-        # Initialize with a default, but engine.py overrides this per patient
+        # Default blob name (engine.py overrides this per patient)
         self.blob_name = "memory/default_patient.json"
         
-        # Initialize GCS Client with explicit project to avoid 403 errors
-        project_id = os.getenv("GCP_PROJECT_ID")
-        self.storage_client = storage.Client(project=project_id)
+        # Initialize GCS Client using the detected project
+        # If project_id is None, it defaults to the environment's default service account project
+        self.storage_client = storage.Client(project=self.project_id)
         self.bucket = None
         
-        try:
-            if self.bucket_name:
+        # Initial connection attempt
+        if self.bucket_name:
+            try:
                 self.bucket = self.storage_client.get_bucket(self.bucket_name)
-        except Exception:
-            self.bucket = None
+            except Exception as e:
+                print(f"⚠️ Memory Store Init: Could not pre-load bucket '{self.bucket_name}': {e}")
 
     def _ensure_bucket(self):
-        """Ensures the bucket is accessible before read/write operations."""
+        """Standard check for bucket presence before I/O."""
         if self.bucket:
             return True
         if not self.bucket_name:
+            print("❌ Memory Error: GCS_MEMORY_BUCKET environment variable is NOT SET.")
             return False
         try:
             self.bucket = self.storage_client.get_bucket(self.bucket_name)
             return True
-        except Exception:
+        except Exception as e:
+            print(f"❌ Memory Error: Access denied or bucket '{self.bucket_name}' not found: {e}")
             return False
 
     def load(self):
-        """Loads memory from GCS. Returns empty dict if the patient is new."""
+        """Loads memory from GCS. Returns empty dict if file missing or bucket error."""
         if not self._ensure_bucket():
             return {}
 
         blob = self.bucket.blob(self.blob_name)
         
         try:
-            # CRITICAL: Check if file exists to prevent 404 errors for new patients
+            # This is the "New Patient" check
             if not blob.exists():
                 return {}
             
             content = blob.download_as_text()
             return json.loads(content)
         except Exception as e:
-            # Silent failure for new sessions, log actual corruption issues
+            # We log this because if the file exists but can't be read, that's a real issue
+            print(f"❌ Memory Load Error for {self.blob_name}: {e}")
             return {}
 
     def save(self, memory):
-        """Persists memory dictionary to the specific patient blob."""
+        """Persists memory to GCS."""
         if not self._ensure_bucket():
             return
 
@@ -69,10 +74,10 @@ class MemoryStore:
                 content_type='application/json'
             )
         except Exception as e:
-            print(f"❌ Storage Save Error ({self.blob_name}): {e}")
+            print(f"❌ Memory Save Error for {self.blob_name}: {e}")
 
     def update(self, new_data: dict):
-        """Utility to load, merge, and save data in one atomic-style step."""
+        """Atomic-style update: Load -> Merge -> Save."""
         current_memory = self.load()
         current_memory.update(new_data)
         self.save(current_memory)

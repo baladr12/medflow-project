@@ -101,38 +101,40 @@ class MedFlowReasoningEngine:
         start_timer = self.obs.start_timer()
 
         try:
-            # 1. SET PATIENT CONTEXT & LOAD MEMORY
+            # 1. LOAD PATIENT HISTORY (Memory Retrieval)
             self.mem_store.blob_name = f"memory/{patient_id}.json"
-            patient_history = self.mem_store.load() # Load existing JSON from GCS
+            history = self.mem_store.load() 
             
-            # Get the previous priority to ensure 'sticky' emergency status
-            prev_priority = patient_history.get("last_triage_level", "routine")
-            self.obs.add_trace("MemoryStore", f"Context set: {patient_id} | Prev Priority: {prev_priority}")
+            # Extract previous state
+            prev_priority = history.get("last_triage_level", "routine")
+            self.obs.add_trace("MemoryStore", f"Patient: {patient_id} | Memory Load: {prev_priority}")
 
-            # 2. ANALYSIS
-            self.obs.add_trace("IntakeAgent", "Extracting clinical entities")
+            # 2. EXTRACTION (IntakeAgent)
+            self.obs.add_trace("IntakeAgent", "Analyzing clinical input")
             raw_data = self.intake.analyse(message)
             
-            # Inject previous priority into the triage input
+            # --- CRITICAL STEP: INJECT PREVIOUS PRIORITY INTO TRIAGE DATA ---
+            # This ensures triage_rules.py sees the 'sticky' status
             raw_data["previous_priority"] = prev_priority
             
-            # 3. TRIAGE (Now history-aware)
-            self.obs.add_trace("TriageAgent", "Determining priority with sticky logic")
+            # 3. TRIAGE (ClinicalTriageAgent)
+            # This now receives raw_data containing 'previous_priority'
+            self.obs.add_trace("TriageAgent", f"Calculating priority (Context: {prev_priority})")
             triage_results = self.triage.triage(raw_data)
             
-            # 4. SUMMARY
-            self.obs.add_trace("SummaryAgent", "Generating clinical summary")
+            # 4. SUMMARY (ClinicalSummaryAgent)
+            self.obs.add_trace("SummaryAgent", "Synthesizing clinical note")
             clinician_summary = self.summary.create_summary(raw_data, triage_results)
             
             # 5. PERSISTENCE & MEMORY UPDATE
             workflow_outcome = "Logged"
             
-            # Update history state with newest triage level
-            patient_history["last_triage_level"] = triage_results.get("level", "routine")
-            self.mem_store.save(patient_history) 
+            # Update history state with the NEW priority level determined in this turn
+            history["last_triage_level"] = triage_results.get("level", "routine")
+            self.mem_store.save(history) 
 
             if consent:
-                self.obs.add_trace("WorkflowAgent", "Saving to BigQuery")
+                self.obs.add_trace("WorkflowAgent", "Persisting to EHR")
                 prepared_case = self.workflow.prepare_case(raw_data, triage_results, clinician_summary)
                 save_result = self.workflow.confirm_and_save(prepared_case, consent=True)
                 workflow_outcome = save_result.get("status", "Saved")
@@ -143,7 +145,7 @@ class MedFlowReasoningEngine:
                 "triage": triage_results,
                 "clinical_summary": clinician_summary,
                 "follow_up": {
-                    "safety_net_advice": triage_results.get('action')
+                    "safety_net_advice": triage_results.get('action', 'Seek medical review if symptoms persist.')
                 },
                 "workflow_status": workflow_outcome,
                 "metadata": {
@@ -159,21 +161,28 @@ class MedFlowReasoningEngine:
 
 # --- DEPLOYMENT SCRIPT ---
 if __name__ == "__main__":
+    # 1. Grab local environment variables
     PROJECT_ID = os.getenv("GCP_PROJECT_ID")
     LOCATION = os.getenv("GCP_LOCATION", "us-central1")
     STAGING_BUCKET = os.getenv("GCS_MEMORY_BUCKET")
 
     if not PROJECT_ID or not STAGING_BUCKET:
-        print("❌ Error: Missing GCP_PROJECT_ID or GCS_MEMORY_BUCKET")
+        print("❌ Error: Missing GCP_PROJECT_ID or GCS_MEMORY_BUCKET in .env")
         exit(1)
 
+    # 2. Initialize Vertex AI for the deployment process
     vertexai.init(project=PROJECT_ID, location=LOCATION, staging_bucket=f"gs://{STAGING_BUCKET}")
 
+    # 3. Create the instance
     engine_instance = MedFlowReasoningEngine()
+    
+    # --- ADD THESE TWO LINES HERE ---
+    # This "passes" your local env vars into the cloud instance object
     engine_instance.project = PROJECT_ID
     engine_instance.bucket_name = STAGING_BUCKET
+    # --------------------------------
 
-    print(f"🚀 Deploying MedFlow v21 with Sticky Memory...")
+    print(f"🚀 Deploying MedFlow v21 to {PROJECT_ID}...")
 
     try:
         remote_app = reasoning_engines.ReasoningEngine.create(
@@ -190,6 +199,6 @@ if __name__ == "__main__":
             display_name="MedFlow_Clinical_Engine_v21",
             extra_packages=["agents", "tools", "memory", "observability"],
         )
-        print(f"✅ Deployed: {remote_app.resource_name}")
+        print(f"✅ Deployed Successfully: {remote_app.resource_name}")
     except Exception as e:
         print(f"❌ Deployment Failed: {str(e)}")
