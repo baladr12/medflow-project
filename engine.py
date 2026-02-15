@@ -187,6 +187,16 @@ if __name__ == "__main__":
             ],
             display_name="MedFlow_ADK_Clinical_Engine_v21",
             extra_packages=["agents", "tools", "memory"],
+            # --- THIS BLOCK FIXES THE FAILED PRECONDITION ERROR ---
+            env_vars={
+                "GCP_PROJECT_ID": PROJECT_ID,
+                "GCP_LOCATION": LOCATION,
+                "GCS_MEMORY_BUCKET": STAGING_BUCKET,
+                "GEMINI_MODEL": os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+                "BQ_DATASET_ID": os.getenv("BQ_DATASET_ID", "clinical_records"),
+                "BQ_TABLE_ID": os.getenv("BQ_TABLE_ID", "triage_cases"),
+            }
+            # ------------------------------------------------------
         )
 
         print(f"\n✅ Deployment Complete!")
