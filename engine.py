@@ -10,7 +10,7 @@ load_dotenv()
 class MedFlowReasoningEngine:
     """
     MedFlow v21: Enterprise Clinical Reasoning Engine.
-    Updated with expanded BigQuery Schema to match EHRStore requirements.
+    Features: 7-Agent Orchestration, Dynamic Triage Advice, and BQ Persistence.
     """
 
     def __init__(self):
@@ -38,7 +38,6 @@ class MedFlowReasoningEngine:
             return
 
         import os
-        # CRITICAL: Force environment variables for the Google GenAI SDK
         if self.project:
             os.environ["GCP_PROJECT_ID"] = self.project
             os.environ["GOOGLE_CLOUD_PROJECT"] = self.project
@@ -80,11 +79,11 @@ class MedFlowReasoningEngine:
         self.followup = FollowUpAgent(self.client)
         self.evaluator = EvaluationAgent(self.client)
         
-        # 4. Sync Cloud Infrastructure
+        # 4. Sync Cloud Infrastructure (Ensures BQ Table exists)
         self._initialize_infrastructure()
 
     def _initialize_infrastructure(self):
-        """Sets up GCS and BigQuery with the correct multi-column schema."""
+        """Sets up BigQuery with the correct 6-column schema."""
         from google.cloud import storage, bigquery
         from google.api_core import exceptions
 
@@ -111,15 +110,12 @@ class MedFlowReasoningEngine:
             dataset = bigquery.Dataset(full_dataset_id)
             dataset.location = self.location
             bq_client.create_dataset(dataset, timeout=30)
-        except exceptions.Forbidden:
-            pass
 
-        # 3. BigQuery Table Check - UPDATED SCHEMA
+        # 3. BigQuery Table Check - 6 Column Schema for EHRStore compatibility
         full_table_id = f"{full_dataset_id}.{self.table_id}"
         try:
             bq_client.get_table(full_table_id)
         except exceptions.NotFound:
-            # We add soap_note and integrity_hash to match what EHRStore sends
             schema = [
                 bigquery.SchemaField("case_id", "STRING", mode="REQUIRED"),
                 bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
@@ -130,24 +126,23 @@ class MedFlowReasoningEngine:
             ]
             table = bigquery.Table(full_table_id, schema=schema)
             bq_client.create_table(table)
-        except exceptions.Forbidden:
-            pass
 
     def query(self, message: str, consent: bool = False):
-        """Main cloud execution point."""
+        """Main cloud execution point with dynamic advice injection."""
         self._setup()
         start_time = datetime.now(timezone.utc)
 
         try:
-            # Execute Agentic Pipeline
+            # 1. Extraction & Decision
             raw_data = self.intake.analyse(message)
             triage_results = self.triage.triage(raw_data)
+            
+            # 2. Summary Generation
             clinician_summary = self.summary.create_summary(raw_data, triage_results)
             
-            # Workflow Automation
+            # 3. Workflow Automation (Persistence)
             workflow_outcome = "Logged"
             if consent:
-                # prepare_case creates the payload that ehr_store needs
                 prepared_case = self.workflow.prepare_case(raw_data, triage_results, clinician_summary)
                 save_result = self.workflow.confirm_and_save(prepared_case, consent=True)
                 workflow_outcome = save_result.get("status", "Saved")
@@ -159,7 +154,10 @@ class MedFlowReasoningEngine:
             return {
                 "triage": triage_results,
                 "clinical_summary": clinician_summary,
-                "follow_up": {"safety_net_advice": "Seek immediate care if symptoms worsen or breathing becomes difficult."},
+                # DYNAMIC ADVICE: Pulls directly from the Triage Agent's specific recommendation
+                "follow_up": {
+                    "safety_net_advice": triage_results.get('action', 'Seek medical review if symptoms persist.')
+                },
                 "workflow_status": workflow_outcome,
                 "metadata": {
                     "latency": f"{round(duration, 2)}s",
@@ -191,7 +189,7 @@ if __name__ == "__main__":
     engine_instance.dataset_id = os.getenv("BQ_DATASET_ID", "clinical_records")
     engine_instance.table_id = os.getenv("BQ_TABLE_ID", "triage_cases")
 
-    print(f"🚀 Deploying to {PROJECT_ID}...")
+    print(f"🚀 Deploying MedFlow v21 to {PROJECT_ID}...")
 
     try:
         remote_app = reasoning_engines.ReasoningEngine.create(
