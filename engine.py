@@ -36,7 +36,6 @@ class MedFlowReasoningEngine:
             raise ValueError("GCP_PROJECT_ID must be set in Environment Variables.")
 
         # --- PHASE 0: Infrastructure Auto-Provisioning ---
-        # Ensures GCS and BigQuery are ready before agents are initialized
         self._initialize_infrastructure()
 
         # Initialize Google GenAI Client
@@ -120,7 +119,7 @@ class MedFlowReasoningEngine:
             # Agent 3: Summary
             clinician_summary = self.summary.create_summary(raw_data, triage_results)
 
-            # Agent 7: Safety Audit (The Gatekeeper)
+            # Agent 7: Safety Audit
             evaluation = self.evaluator.evaluate(raw_data, triage_results, clinician_summary)
             
             if not evaluation.get("safety_pass", True):
@@ -173,20 +172,18 @@ if __name__ == "__main__":
     # Pull dynamic config from .env
     PROJECT_ID = os.getenv("GCP_PROJECT_ID")
     LOCATION = os.getenv("GCP_LOCATION", "us-central1")
-    SERVICE_ACCOUNT = os.getenv("GCP_SERVICE_ACCOUNT")
 
-    if not all([PROJECT_ID, SERVICE_ACCOUNT]):
-        print("❌ Error: Missing GCP_PROJECT_ID or GCP_SERVICE_ACCOUNT in .env")
+    if not PROJECT_ID:
+        print("❌ Error: Missing GCP_PROJECT_ID in Environment")
         exit(1)
 
+    # Initialize with the project - it will use the credentials from the shell (GitHub Actions)
     vertexai.init(project=PROJECT_ID, location=LOCATION)
 
     print(f"🚀 Deploying MedFlow Engine to {PROJECT_ID}...")
-    print(f"👤 Using Service Account: {SERVICE_ACCOUNT}")
 
     try:
-        # reasoning_engines.ReasoningEngine.create packages the class and 
-        # its local folder dependencies into a cloud-hosted API.
+        # We REMOVED the service_account argument from here to fix the TypeError
         remote_app = reasoning_engines.ReasoningEngine.create(
             MedFlowReasoningEngine(),
             requirements=[
@@ -198,12 +195,11 @@ if __name__ == "__main__":
             ],
             display_name="MedFlow_ADK_Clinical_Engine_v21",
             extra_packages=["agents", "tools", "memory"],
-            service_account=SERVICE_ACCOUNT, # Dynamically attached SA
         )
 
         print(f"\n✅ Deployment Complete!")
         print(f"Engine Resource ID: {remote_app.resource_name}")
-        print("\n👉 Paste the Resource ID above into your .env under ENGINE_RESOURCE_ID")
+        print("\n👉 Paste the Resource ID above into your UI .env file.")
 
     except Exception as e:
         print(f"\n❌ Deployment Failed: {str(e)}")
