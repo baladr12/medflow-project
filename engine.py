@@ -38,7 +38,7 @@ class MedFlowReasoningEngine:
         if self.client is not None:
             return
 
-        # Ensure project variables are set in the environment for GCS/BQ clients
+        # Ensure project variables are set for Google Cloud Clients
         if self.project:
             os.environ["GCP_PROJECT_ID"] = self.project
             os.environ["GOOGLE_CLOUD_PROJECT"] = self.project
@@ -64,9 +64,18 @@ class MedFlowReasoningEngine:
             credentials=credentials
         )
 
+        # 1. Initialize Stores
         self.ehr = EHRStore()         
         self.mem_store = MemoryStore()
         
+        # --- THE MEMORY FIX ---
+        # Force the bucket name into the MemoryStore so it points to the correct GCS location
+        if self.bucket_name:
+            self.mem_store.bucket_name = self.bucket_name
+            print(f"DEBUG: MemoryStore linked to bucket: {self.bucket_name}")
+        # ----------------------
+
+        # 2. Initialize Agents
         self.intake = PatientUnderstandingAgent(self.client)
         self.triage = ClinicalTriageAgent(self.client)
         self.summary = ClinicalSummaryAgent(self.client)
@@ -107,45 +116,37 @@ class MedFlowReasoningEngine:
             self.mem_store.blob_name = f"memory/{patient_id}.json"
             history = self.mem_store.load() 
 
-            # THE FIX: Log exactly what was found in GCS
-            print(f"DEBUG: RAW HISTORY LOADED FOR {patient_id}: {history}")
-            
-            # Standardize the string to prevent "Emergency" vs "emergency" mismatches
+            # Standardize priority for the logic latch
             prev_priority = str(history.get("last_triage_level", "routine")).lower().strip()
-            print(f"DEBUG: FINAL PREV_PRIORITY SENT TO AGENT: {prev_priority}")
             
-            # DEBUG 1: Verify load
             print(f"DEBUG: Memory for {patient_id} loaded. Value: {prev_priority}")
             self.obs.add_trace("MemoryStore", f"Patient: {patient_id} | Memory Load: {prev_priority}")
 
-            # 2. EXTRACTION (IntakeAgent)
+            # 2. EXTRACTION
             self.obs.add_trace("IntakeAgent", "Analyzing clinical input")
             extracted_data = self.intake.analyse(message)
             
             # --- THE AGGRESSIVE INJECTION ---
-            # Create a combined payload to ensure memory is never lost
             triage_payload = {**extracted_data} 
             triage_payload["previous_priority"] = prev_priority
             
-            # 3. TRIAGE (ClinicalTriageAgent)
-            # This now receives the payload with "previous_priority"
+            # 3. TRIAGE (Sticky Priority Check inside this agent)
             self.obs.add_trace("TriageAgent", f"Calculating priority (Context: {prev_priority})")
             triage_results = self.triage.triage(triage_payload)
             new_level = triage_results.get("level", "routine")
             
-            # 4. SUMMARY (ClinicalSummaryAgent)
+            # 4. SUMMARY
             self.obs.add_trace("SummaryAgent", "Synthesizing clinical note")
             clinician_summary = self.summary.create_summary(triage_payload, triage_results)
             
             # 5. PERSISTENCE & MEMORY UPDATE
-            # DEBUG 2: Verify save intent
             history["last_triage_level"] = new_level
-            print(f"DEBUG: Attempting to save {new_level} to {self.mem_store.blob_name}")
+            print(f"DEBUG: Attempting to save '{new_level}' to {self.mem_store.blob_name}")
             self.mem_store.save(history) 
 
-            # DEBUG 3: Verification Load
+            # VERIFICATION LOG (Crucial for debugging the 'None' issue)
             verify_history = self.mem_store.load()
-            print(f"DEBUG: Immediate verification load: {verify_history.get('last_triage_level')}")
+            print(f"DEBUG: Verification load result: {verify_history.get('last_triage_level')}")
 
             workflow_outcome = "Logged"
             if consent:
@@ -176,7 +177,6 @@ class MedFlowReasoningEngine:
 
 # --- DEPLOYMENT SCRIPT ---
 if __name__ == "__main__":
-    # 1. Grab local environment variables
     PROJECT_ID = os.getenv("GCP_PROJECT_ID")
     LOCATION = os.getenv("GCP_LOCATION", "us-central1")
     STAGING_BUCKET = os.getenv("GCS_MEMORY_BUCKET")
@@ -185,10 +185,8 @@ if __name__ == "__main__":
         print("❌ Error: Missing GCP_PROJECT_ID or GCS_MEMORY_BUCKET in .env")
         exit(1)
 
-    # 2. Initialize Vertex AI
     vertexai.init(project=PROJECT_ID, location=LOCATION, staging_bucket=f"gs://{STAGING_BUCKET}")
 
-    # 3. Create and configure instance
     engine_instance = MedFlowReasoningEngine()
     engine_instance.project = PROJECT_ID
     engine_instance.bucket_name = STAGING_BUCKET
@@ -207,7 +205,7 @@ if __name__ == "__main__":
                 "python-dotenv",
                 "pydantic"
             ],
-            display_name="MedFlow_FINAL_TEST",
+            display_name="MedFlow_FINAL_TEST_LATCH",
             extra_packages=["agents", "tools", "memory", "observability"],
         )
         print(f"✅ Deployed Successfully: {remote_app.resource_name}")
