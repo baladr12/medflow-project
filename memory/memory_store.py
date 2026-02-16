@@ -25,20 +25,30 @@ class MemoryStore:
             return {}
 
     def save(self, memory):
-        """Persists memory to GCS with forced consistency."""
+        """Persists memory to GCS with root-level pathing."""
+        # 1. Safety Check: Ensure the bucket name was passed from engine.py
+        if not self.bucket_name:
+            print("❌ MemoryStore Save Error: No bucket_name configured.")
+            return
+
         try:
-            # Re-fetch bucket and blob directly to avoid stale references
+            # 2. Re-fetch bucket and blob directly
             bucket = self.storage_client.bucket(self.bucket_name)
-            blob = bucket.blob(self.blob_name)
             
-            # Forced metadata to prevent caching
+            # NOTE: self.blob_name is set in engine.py as "{patient_id}.json"
+            blob = bucket.blob(self.blob_name) 
+            
+            # 3. Forced metadata to prevent caching
             blob.cache_control = "no-store" 
             
             data_string = json.dumps(memory, indent=2)
+            
+            # 4. Upload to the root of the bucket (next to your .pkl files)
             blob.upload_from_string(
                 data=data_string,
                 content_type='application/json'
             )
-            print(f"✅ Successfully wrote {len(data_string)} bytes to {self.blob_name}")
+            print(f"✅ SUCCESS: Saved to gs://{self.bucket_name}/{self.blob_name}")
+            
         except Exception as e:
-            print(f"❌ Memory Save Error: {e}")
+            print(f"❌ Save Error: {str(e)}")

@@ -113,7 +113,7 @@ class MedFlowReasoningEngine:
 
         try:
             # 1. LOAD PATIENT HISTORY
-            self.mem_store.blob_name = f"memory/{patient_id}.json"
+            self.mem_store.blob_name = f"{patient_id}.json"
             history = self.mem_store.load() 
 
             # Standardize priority for the logic latch
