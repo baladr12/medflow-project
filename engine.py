@@ -4,9 +4,15 @@ from vertexai.preview import reasoning_engines
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
+# Ensure environment is loaded before anything else
 load_dotenv()
 
 class MedFlowReasoningEngine:
+    """
+    MedFlow v21: Enterprise Clinical Reasoning Engine.
+    Corrected to use only existing agents.
+    """
+
     def __init__(self):
         self.project = os.getenv("GCP_PROJECT_ID")
         self.location = os.getenv("GCP_LOCATION", "us-central1")
@@ -15,6 +21,7 @@ class MedFlowReasoningEngine:
         self.dataset_id = "clinical_records"
         self.table_id = "triage_cases"
         
+        # Object placeholders
         self.client = None
         self.obs = None
         self.intake = None
@@ -26,12 +33,18 @@ class MedFlowReasoningEngine:
         self.mem_store = None
 
     def _setup(self):
-        if self.client is not None: return
+        """Initializes existing agents and tools with cloud context."""
+        if self.client is not None:
+            return
+
+        if self.project:
+            os.environ["GCP_PROJECT_ID"] = self.project
+            os.environ["GOOGLE_CLOUD_PROJECT"] = self.project
 
         from google import genai
         from google.auth import default
         
-        # ONLY your existing agents
+        # ONLY importing what you confirmed exists
         from agents.patient_understanding import PatientUnderstandingAgent
         from agents.clinical_triage import ClinicalTriageAgent
         from agents.clinical_summary import ClinicalSummaryAgent
@@ -50,11 +63,13 @@ class MedFlowReasoningEngine:
             credentials=credentials
         )
 
+        # 1. Initialize Stores
         self.ehr = EHRStore()         
         self.mem_store = MemoryStore()
         if self.bucket_name:
             self.mem_store.bucket_name = self.bucket_name
         
+        # 2. Initialize Agents
         self.intake = PatientUnderstandingAgent(self.client)
         self.triage = ClinicalTriageAgent(self.client)
         self.summary = ClinicalSummaryAgent(self.client)
@@ -64,12 +79,14 @@ class MedFlowReasoningEngine:
         self._initialize_infrastructure()
 
     def _initialize_infrastructure(self):
+        """Ensures BigQuery resources exist."""
         from google.cloud import bigquery
         from google.api_core import exceptions
         project_id = self.project or os.getenv("GCP_PROJECT_ID")
         if not project_id: return
         bq_client = bigquery.Client(project=project_id)
         full_dataset_id = f"{project_id}.{self.dataset_id}"
+        
         try:
             bq_client.get_dataset(full_dataset_id)
         except exceptions.NotFound:
@@ -79,12 +96,13 @@ class MedFlowReasoningEngine:
         except Exception: pass
 
     def query(self, message: str, consent: bool = False, patient_id: str = "anonymous"):
+        """Main cloud execution with State-Aware Triage."""
         self._setup()
         trace_id = self.obs.start_request()
         start_timer = self.obs.start_timer()
 
         try:
-            # 1. Memory Load
+            # 1. LOAD PATIENT HISTORY
             self.mem_store.blob_name = f"sessions/{patient_id}.json"
             try:
                 history = self.mem_store.load() 
@@ -93,23 +111,26 @@ class MedFlowReasoningEngine:
 
             prev_priority = str(history.get("last_triage_level", "routine")).lower().strip()
 
-            # 2. Analysis
+            # 2. EXTRACTION
             extracted_data = self.intake.analyse(message)
             
-            # 3. Triage
+            # 3. TRIAGE
             triage_payload = {**extracted_data} 
             triage_payload["previous_priority"] = prev_priority
-            triage_results = self.triage.triage(triage_payload)
             
-            # 4. Summary
+            triage_results = self.triage.triage(triage_payload)
+            new_level = triage_results.get("level", "routine")
+            
+            # 4. SUMMARY
             clinician_summary = self.summary.create_summary(triage_payload, triage_results)
             
-            # 5. Save State
-            new_level = triage_results.get("level", "routine")
+            # 5. PERSISTENCE
             history["last_triage_level"] = new_level
-            self.mem_store.save(history) 
+            try:
+                self.mem_store.save(history) 
+            except Exception: pass
 
-            # 6. Workflow
+            # 6. WORKFLOW
             workflow_outcome = "Logged"
             if consent:
                 prepared_case = self.workflow.prepare_case(triage_payload, triage_results, clinician_summary)
@@ -118,13 +139,13 @@ class MedFlowReasoningEngine:
 
             latency = self.obs.stop_timer(start_timer)
             
-            # --- THE FIX IS HERE ---
+            # --- CRITICAL FIX: Mapping the questions to the return object ---
             return {
                 "triage": triage_results,
                 "clinical_summary": clinician_summary,
                 "follow_up": {
                     "safety_net_advice": triage_results.get('action', 'Seek medical review.'),
-                    # This ensures the UI sees the questions list
+                    # We grab 'questions' from your triage results here
                     "questions_to_ask": triage_results.get('questions', []) 
                 },
                 "workflow_status": workflow_outcome,
@@ -165,11 +186,14 @@ if __name__ == "__main__":
         "requests"
     ]
 
-    remote_app = reasoning_engines.ReasoningEngine.create(
-        engine_instance,
-        requirements=REQS,
-        display_name="MedFlow_FORCE_FINAL_VERSION",
-        extra_packages=["agents", "tools", "memory", "observability"],
-        service_account=SERVICE_ACCOUNT
-    )
-    print(f"✅ Deployed Successfully: {remote_app.resource_name}")
+    try:
+        remote_app = reasoning_engines.ReasoningEngine.create(
+            engine_instance,
+            requirements=REQS,
+            display_name="MedFlow_FORCE_FINAL_VERSION", 
+            extra_packages=["agents", "tools", "memory", "observability"],
+            service_account=SERVICE_ACCOUNT
+        )
+        print(f"✅ Deployed Successfully: {remote_app.resource_name}")
+    except Exception as e:
+        print(f"❌ Deployment failed: {str(e)}")
