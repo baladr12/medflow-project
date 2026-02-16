@@ -180,9 +180,11 @@ if __name__ == "__main__":
     PROJECT_ID = os.getenv("GCP_PROJECT_ID")
     LOCATION = os.getenv("GCP_LOCATION", "us-central1")
     STAGING_BUCKET = os.getenv("GCS_MEMORY_BUCKET")
+    # NEW: Pull the service account from env
+    SERVICE_ACCOUNT = os.getenv("GCP_SERVICE_ACCOUNT")
 
-    if not PROJECT_ID or not STAGING_BUCKET:
-        print("❌ Error: Missing GCP_PROJECT_ID or GCS_MEMORY_BUCKET in .env")
+    if not all([PROJECT_ID, STAGING_BUCKET, SERVICE_ACCOUNT]):
+        print("❌ Error: Missing configuration in .env (Project, Bucket, or Service Account)")
         exit(1)
 
     vertexai.init(project=PROJECT_ID, location=LOCATION, staging_bucket=f"gs://{STAGING_BUCKET}")
@@ -191,7 +193,8 @@ if __name__ == "__main__":
     engine_instance.project = PROJECT_ID
     engine_instance.bucket_name = STAGING_BUCKET
 
-    print(f"🚀 Deploying MedFlow v21 to {PROJECT_ID}...")
+    print(f"🚀 Deploying MedFlow v21 Final Latch to {PROJECT_ID}...")
+    print(f"🚀 Deploying with Service Account: {SERVICE_ACCOUNT}")
 
     try:
         remote_app = reasoning_engines.ReasoningEngine.create(
@@ -205,8 +208,10 @@ if __name__ == "__main__":
                 "python-dotenv",
                 "pydantic"
             ],
-            display_name="MedFlow_V21_FINAL_FORCE_PATCH_01",
+            display_name="MedFlow_DYNAMIC_SA_DEPLOY",
             extra_packages=["agents", "tools", "memory", "observability"],
+            # DYNAMIC INJECTION
+            service_account=SERVICE_ACCOUNT
         )
         print(f"✅ Deployed Successfully: {remote_app.resource_name}")
     except Exception as e:
