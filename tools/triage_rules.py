@@ -29,10 +29,20 @@ def check_red_flags(data: dict) -> str:
     
     # 3. EMERGENCY: Immediate Life-Threatening Keywords
     emergency_keywords = {
+        # Respiratory / Cardiac
         "chest pain", "shortness of breath", "sob", "difficulty breathing",
+        "heart attack", "radiating pain", "arm pain", 
+        
+        # Neurological
         "stroke", "facial drooping", "slurred speech", "unconscious", 
-        "seizure", "heavy bleeding", "suicidal ideation", "heart attack",
-        "dizzy", "radiating pain", "arm pain", "confusion", "drooping"
+        "seizure", "confusion", "drooping", "dizzy",
+        
+        # --- NEW: Abdominal / Acute Surgical ---
+        "lower right", "rlq", "right lower quadrant", "sharp pain",
+        "rebound tenderness", "rigid abdomen", "unable to walk",
+        
+        # Trauma / Psych
+        "heavy bleeding", "suicidal ideation"
     }
 
     # Combined indicator pool for new detection

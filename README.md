@@ -1,62 +1,91 @@
-# medflow-project
-A safe, transparent, automated triage assistant can significantly reduce workload and improve patient flow.
-# 🏥 MedFlow AI: Clinical Triage Orchestrator (v20)
+🏥 MedFlow: Enterprise Clinical Reasoning Engine
+MedFlow is a state-aware, multi-agent medical triage system built on Google Vertex AI Reasoning Engine. It transforms raw patient narratives into structured, actionable clinical insights by combining deterministic safety guardrails with the advanced generative reasoning of Gemini 2.0 Flash.
 
-MedFlow AI is a safety-first, multi-agent patient intake system powered by **Gemini 2.0 Flash**. It automates the transition from raw patient symptoms to structured clinical records while maintaining strict medical guardrails.
+🏗️ 7-Agent Architecture
+MedFlow utilizes a specialized multi-agent orchestration pattern. Each agent is a discrete logical unit designed to perform a specific function within the clinical pipeline:
 
----
+Patient Understanding (Intake): Extracts symptoms, duration, and severity from unstructured patient chat.
 
-## 🧩 Multi-Agent Architecture
+Investigation Agent: Analyzes gaps in data and generates diagnostic-specific follow-up questions.
 
-This system replaces "single-prompt" AI with a specialized **7-Agent Pipeline**. Each agent has a specific clinical responsibility:
+Clinical Triage Agent: Categorizes risks (Emergency, Urgent, Routine) using hybrid deterministic/AI logic.
 
-| Agent | Responsibility | Logic Type |
-| :--- | :--- | :--- |
-| **1. Intake** | Extraction of symptoms & red flags | LLM (Structured) |
-| **2. Triage** | Risk level assignment | **Hybrid** (Rules + LLM) |
-| **3. Summary** | Clinical documentation for GPs | LLM (Professional) |
-| **4. Workflow** | EHR persistence & SHA-256 Hashing | Deterministic |
-| **5. Memory** | Stable attribute tracking (Allergies/Meds) | LLM (MAC Pattern) |
-| **6. FollowUp** | Risk-stratified safety netting | LLM (Contextual) |
-| **7. Evaluation**| Quality Audit & Safety Scoring | **Hybrid** (Judge + Rules) |
+Clinical Summary Agent: Translates technical data into professional clinician notes and chief complaints.
 
+Evaluation Agent (Safety Gate): Conducts a "silent review" of the triage decision to ensure safety compliance.
 
+Workflow Automation Agent: Manages EHR integration and persists records to BigQuery.
 
----
+Memory Agent (The Latch): Manages "Sticky Triage" states by syncing session data to Google Cloud Storage.
 
-## 🛡️ Clinical Safety Features
+🧠 Core Clinical Logic
+🔒 The GCS Latch (Sticky Memory)
+MedFlow implements a "Sticky Priority" logic. If a patient triggers an Emergency state (e.g., chest pain), the system "latches" that status. Even if the patient later reports feeling better, the session remains locked in Emergency status until the encounter is closed, preventing dangerous de-escalations during active symptoms.
 
-* **Deterministic Guardrails**: Uses `triage_rules.py` to identify high-risk symptoms (e.g., Chest Pain, SOB) before the LLM processes the data, preventing "under-triage."
-* **Integrity Hashing**: Clinical data is hashed using SHA-256. If data is modified before patient consent is captured, the system blocks the EHR write.
-* **Audit Trail**: Every transaction generates a vertical timeline trace, providing transparency into which agent made which decision.
-* **Safety Netting**: Automatically generates "Red Flag" advice for patients (e.g., "If symptoms worsen, call emergency services immediately").
+🕵️ Investigation Mandate
+To prevent "vague-in, vague-out" results, the engine is mandated to investigate. In Routine or Urgent cases, the engine must generate a questions_to_ask array. This forces the UI to provide interactive buttons that help rule out high-risk pathologies (e.g., asking for the specific quadrant of abdominal pain).
 
----
+🛡️ Deterministic Guardrails (triage_rules.py)
+Before the LLM processes the data, a hard-coded Python layer scans for high-sensitivity keywords (Red Flags):
 
-## 🚀 Getting Started
+Cardiac: Chest pain, radiating arm pain, SOB.
 
-### 1. Project Structure
-```text
-├── agent.py               # Flask Orchestrator (Backend)
-├── app.py                 # Streamlit Dashboard (Frontend)
-├── agents/                # Agent definitions (1-7)
-├── tools/                 # EHRStore and triage_rules.py
-├── observability/         # Centralized logs & metrics
-└── memory/                # Long-term patient profile logic
+Neurological: Facial drooping, slurred speech, sudden confusion.
 
-2. Deployment (Vertex AI)
-Build the custom container for Google Cloud:
+Abdominal: RLQ (Right Lower Quadrant), rigid abdomen, rebound tenderness.
 
-docker build -t gcr.io/[PROJECT_ID]/medflow-brain:v20 .
-gcloud auth configure-docker
-docker push gcr.io/[PROJECT_ID]/medflow-brain:v20
+🛠️ Technical Stack
+Language: Python 3.11+
 
-⚖️ Clinical Disclaimer
-Note: MedFlow AI is a Clinical Decision Support (CDS) tool intended for use by healthcare professionals. It is not a replacement for professional medical judgment, diagnosis, or treatment. Always verify AI-generated summaries against raw patient data.
+LLM: Gemini 2.0 Flash (Vertex AI)
 
-📊 Observability & Monitoring
-The system integrates with Google Cloud Logging. Metrics are captured for:
+Orchestration: Vertex AI Reasoning Engine (v1beta1)
 
-Triage Severity Distribution (Emergency vs. Routine)
-End-to-End Pipeline Latency
-Agent-level success/failure rates
+Storage: Google Cloud Storage (Session Latch) & BigQuery (EHR Records)
+
+Observability: Google Cloud Logging & Custom Manager
+
+UI: Streamlit (Enterprise Dashboard)
+
+🚀 Deployment & Installation
+1. Environment Setup
+Create a .env file with your GCP credentials:
+
+Code snippet
+GCP_PROJECT_ID="your-project-id"
+GCP_LOCATION="us-central1"
+GCS_MEMORY_BUCKET="your-session-bucket"
+GEMINI_MODEL="gemini-2.0-flash"
+GCP_SERVICE_ACCOUNT="medflow-deployer@your-project.iam.gserviceaccount.com"
+2. Deploy to Vertex AI
+The engine.py script handles the remote build and deployment:
+
+Bash
+python engine.py
+The script automatically detects SDK versions and falls back to default identities if service account parameters are unsupported locally.
+
+3. Launch the Dashboard
+Bash
+streamlit run streamlit_ui_app.py
+📊 API Schema Example
+MedFlow returns a standardized JSON object for every turn:
+
+JSON
+{
+  "triage": {
+    "level": "emergency",
+    "reasoning": "RLQ pain + Fever indicates possible appendicitis.",
+    "questions": [],
+    "confidence_score": 0.95
+  },
+  "follow_up": {
+    "safety_net_advice": "Proceed to the nearest Emergency Room immediately.",
+    "questions_to_ask": []
+  },
+  "metadata": {
+    "patient_id": "TEMP-B03100C2",
+    "latency": "4.09s"
+  }
+}
+📜 Disclaimer
+MedFlow is a Clinical Decision Support (CDS) tool. It is intended for healthcare professional use or as a screening aid. It does not provide medical diagnoses or replace the judgment of a licensed physician. In case of a real medical emergency, users should contact emergency services (911) immediately.
