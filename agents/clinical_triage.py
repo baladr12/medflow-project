@@ -64,11 +64,11 @@ class ClinicalTriageAgent:
             result = json.loads(response.text)
 
             # --- THE FINAL GUARDRAIL (Python Level) ---
-            if rule_result == "emergency" and result["level"] != "emergency":
+            if rule_result == "emergency":
+                # We force this even if Gemini got it right, just so we see the "LATCH" text
                 result["level"] = "emergency"
-                result["reasoning"] = f"EMERGENCY LATCH: {result['reasoning']} (Priority maintained due to active emergency status in this session)."
-                # Add this line to ensure the action stays life-saving
-                result["action"] = "IMMEDIATE EMERGENCY ACTION REQUIRED: Call 911/EMS or proceed to the nearest Emergency Department immediately."
+                result["reasoning"] = f"EMERGENCY LATCH ACTIVE: {result.get('reasoning', '')}"
+                result["action"] = "IMMEDIATE EMERGENCY ACTION REQUIRED: Call 911/EMS."
             
             return result
 

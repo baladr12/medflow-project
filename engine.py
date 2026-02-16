@@ -103,12 +103,16 @@ class MedFlowReasoningEngine:
         start_timer = self.obs.start_timer()
 
         try:
-            # 1. LOAD PATIENT HISTORY (Memory Retrieval)
+            # 1. LOAD PATIENT HISTORY
             self.mem_store.blob_name = f"memory/{patient_id}.json"
             history = self.mem_store.load() 
+
+            # THE FIX: Log exactly what was found in GCS
+            print(f"DEBUG: RAW HISTORY LOADED FOR {patient_id}: {history}")
             
             # Standardize the string to prevent "Emergency" vs "emergency" mismatches
             prev_priority = str(history.get("last_triage_level", "routine")).lower().strip()
+            print(f"DEBUG: FINAL PREV_PRIORITY SENT TO AGENT: {prev_priority}")
             
             # DEBUG 1: Verify load
             print(f"DEBUG: Memory for {patient_id} loaded. Value: {prev_priority}")
@@ -203,7 +207,7 @@ if __name__ == "__main__":
                 "python-dotenv",
                 "pydantic"
             ],
-            display_name="MedFlow_Clinical_Engine_v21",
+            display_name="MedFlow_FINAL_TEST",
             extra_packages=["agents", "tools", "memory", "observability"],
         )
         print(f"✅ Deployed Successfully: {remote_app.resource_name}")
