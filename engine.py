@@ -96,38 +96,55 @@ class MedFlowReasoningEngine:
         except Exception: pass
 
     def query(self, message: str, consent: bool = False, patient_id: str = "anonymous"):
-        """Main cloud execution with State-Aware Triage."""
+        """Main cloud execution with State-Aware Triage and GCS Debugging."""
         self._setup()
         trace_id = self.obs.start_request()
         start_timer = self.obs.start_timer()
 
+        print(f"DEBUG [START]: Query for patient {patient_id}")
+        print(f"DEBUG [CONFIG]: Target Bucket: {self.bucket_name}")
+
         try:
-            # 1. LOAD PATIENT HISTORY (The Sticky Latch Source)
-            self.mem_store.blob_name = f"{patient_id}.json"
-            history = self.mem_store.load() 
+            # 1. LOAD PATIENT HISTORY
+            self.mem_store.blob_name = f"sessions/{patient_id}.json" # Added 'sessions/' prefix
             
-            # Use .get() with a default 'routine' and strip white space
+            try:
+                history = self.mem_store.load() 
+                print(f"DEBUG [MEMORY]: Load successful for {patient_id}")
+            except Exception as load_err:
+                print(f"DEBUG [MEMORY]: No existing session found or error: {str(load_err)}")
+                history = {}
+
+            # Get previous priority
             prev_priority = str(history.get("last_triage_level", "routine")).lower().strip()
+            print(f"DEBUG [STATE]: Previous priority was: {prev_priority}")
             
             self.obs.add_trace("MemoryStore", f"Load: {prev_priority} for {patient_id}")
 
             # 2. EXTRACTION
             extracted_data = self.intake.analyse(message)
             
-            # 3. TRIAGE (Injecting the previous priority into the tool payload)
+            # 3. TRIAGE
             triage_payload = {**extracted_data} 
             triage_payload["previous_priority"] = prev_priority
             
             triage_results = self.triage.triage(triage_payload)
             new_level = triage_results.get("level", "routine")
+            print(f"DEBUG [STATE]: New triage level calculated: {new_level}")
             
             # 4. SUMMARY
             clinician_summary = self.summary.create_summary(triage_payload, triage_results)
             
-            # 5. PERSISTENCE (Update memory with the new level)
+            # 5. PERSISTENCE (Update and Save)
             history["last_triage_level"] = new_level
-            self.mem_store.save(history) 
+            
+            try:
+                self.mem_store.save(history) 
+                print(f"DEBUG [SAVE]: Successfully saved {new_level} to gs://{self.bucket_name}/sessions/{patient_id}.json")
+            except Exception as save_err:
+                print(f"❌ DEBUG [SAVE ERROR]: FAILED to write to GCS: {str(save_err)}")
 
+            # 6. WORKFLOW
             workflow_outcome = "Logged"
             if consent:
                 prepared_case = self.workflow.prepare_case(triage_payload, triage_results, clinician_summary)
@@ -151,6 +168,7 @@ class MedFlowReasoningEngine:
                 }
             }
         except Exception as e:
+            print(f"❌ CRITICAL: Pipeline Crashed: {str(e)}")
             if self.obs: self.obs.error(f"Pipeline Error: {str(e)}")
             return {"status": "error", "message": str(e)}
 
@@ -207,7 +225,7 @@ if __name__ == "__main__":
             remote_app = reasoning_engines.ReasoningEngine.create(
                 engine_instance,
                 requirements=REQS,
-                display_name="MedFlow_LATCH_FORCE_FINAL_AUTO",
+                display_name="MedFlow_LATCH_FORCE_FINAL_AUTO_V1",
                 extra_packages=["agents", "tools", "memory", "observability"]
             )
             print(f"✅ Deployed Successfully (Auto-Identity): {remote_app.resource_name}")
