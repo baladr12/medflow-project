@@ -186,14 +186,28 @@ if __name__ == "__main__":
         "requests"
     ]
 
+    print(f"🚀 Deploying to {PROJECT_ID}...")
+
     try:
+        # Try with service_account first
         remote_app = reasoning_engines.ReasoningEngine.create(
             engine_instance,
             requirements=REQS,
-            display_name="MedFlow_FORCE_FINAL_VERSION", 
+            display_name="MedFlow_FORCE_FINAL_VERSION",
             extra_packages=["agents", "tools", "memory", "observability"],
-            service_account=SERVICE_ACCOUNT
+            service_account=SERVICE_ACCOUNT  # This causes the 'unexpected keyword' error in older SDKs
         )
-        print(f"✅ Deployed Successfully: {remote_app.resource_name}")
-    except Exception as e:
-        print(f"❌ Deployment failed: {str(e)}")
+    except TypeError as e:
+        if "unexpected keyword argument 'service_account'" in str(e):
+            print("⚠️ SDK version doesn't support 'service_account' parameter. Falling back...")
+            # Fallback: Create without the parameter (it will use the default Compute Engine account)
+            remote_app = reasoning_engines.ReasoningEngine.create(
+                engine_instance,
+                requirements=REQS,
+                display_name="MedFlow_FORCE_FINAL_VERSION",
+                extra_packages=["agents", "tools", "memory", "observability"]
+            )
+        else:
+            raise e
+
+    print(f"✅ Deployed Successfully: {remote_app.resource_name}")
