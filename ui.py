@@ -163,7 +163,15 @@ if prompt := st.chat_input("How are you feeling today?"):
 with st.sidebar:
     st.header("MedFlow Controls")
     if st.button("Clear Chat Session"):
+        # 1. Clear the messages
         st.session_state.messages = []
-        # Rotating the patient_id resets the memory latch in GCS
-        st.session_state.patient_id = f"TEMP-{uuid.uuid4().hex[:8].upper()}"
+        
+        # 2. DELETE the existing patient_id key entirely
+        if "patient_id" in st.session_state:
+            del st.session_state.patient_id
+        
+        # 3. Clear the cached engine resource (optional but cleaner)
+        st.cache_resource.clear()
+        
+        # 4. Rerun (The script will restart and generate a NEW ID at the top)
         st.rerun()
