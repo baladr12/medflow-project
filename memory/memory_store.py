@@ -25,17 +25,17 @@ class MemoryStore:
             return {}
 
     def save(self, memory):
-    print(f"DEBUG: STARTING SAVE PROCESS FOR BUCKET: {self.bucket_name}")
-    try:
-        bucket = self.storage_client.bucket(self.bucket_name)
-        blob = bucket.blob(self.blob_name)
-        
-        # LOG THIS EXACT LINE TO YOUR TERMINAL
-        print(f"DEBUG: TARGET BLOB PATH: gs://{self.bucket_name}/{self.blob_name}")
-        
-        data_string = json.dumps(memory)
-        blob.upload_from_string(data_string, content_type='application/json')
-        
-        print(f"DEBUG: SAVE COMPLETED SUCCESSFULLY")
-    except Exception as e:
-        print(f"❌ DEBUG: PHYSICAL SAVE ERROR: {str(e)}")
+        print(f"DEBUG: STARTING SAVE PROCESS FOR BUCKET: {self.bucket_name}")
+        try:
+            bucket = self.storage_client.bucket(self.bucket_name)
+            blob = bucket.blob(self.blob_name)
+            
+            # LOG THIS EXACT LINE TO YOUR TERMINAL
+            print(f"DEBUG: TARGET BLOB PATH: gs://{self.bucket_name}/{self.blob_name}")
+            
+            data_string = json.dumps(memory)
+            blob.upload_from_string(data_string, content_type='application/json')
+            
+            print(f"DEBUG: SAVE COMPLETED SUCCESSFULLY")
+        except Exception as e:
+            print(f"❌ DEBUG: PHYSICAL SAVE ERROR: {str(e)}")
