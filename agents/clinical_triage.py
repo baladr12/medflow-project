@@ -6,7 +6,7 @@ class ClinicalTriageAgent:
     """
     Agent 2: Hybrid Clinical Triage.
     Combines deterministic rules with Gemini's clinical reasoning.
-    Now with Mandatory Latch for Emergency Status.
+    Now with Mandatory Follow-up Questions for non-emergency cases.
     """
 
     def __init__(self, client):
@@ -15,10 +15,10 @@ class ClinicalTriageAgent:
 
     def triage(self, structured_input: dict):
         # 1. Deterministic Rule-Based Check (Hard Guardrail)
-        # This will return 'emergency' if 'previous_priority' was 'emergency'
         rule_result = check_red_flags(structured_input)
 
         # 2. Define the Strict Response Schema
+        # Added 'questions' as a required array to ensure UI compatibility
         triage_schema = {
             "type": "OBJECT",
             "properties": {
@@ -28,23 +28,29 @@ class ClinicalTriageAgent:
                 },
                 "reasoning": {"type": "STRING"},
                 "action": {"type": "STRING"},
+                "questions": {
+                    "type": "ARRAY",
+                    "items": {"type": "STRING"}
+                },
                 "confidence_score": {"type": "NUMBER"}
             },
-            "required": ["level", "reasoning", "action", "confidence_score"]
+            "required": ["level", "reasoning", "action", "questions", "confidence_score"]
         }
 
         # 3. Enhanced Instructions
-        # We tell the AI EXPLICITLY about the session history and the rule result.
+        # We mandate questions for 'routine' or 'urgent' to improve diagnostic depth.
         system_instruction = f"""
         You are a Clinical Triage Validator. 
         
         SAFETY MANDATE:
         The safety tool has classified this session as: "{rule_result.upper()}".
-        
         If the safety tool says 'emergency', you MUST return 'emergency'. 
-        This is because a life-threatening condition was identified earlier in this 
-        patient encounter (Sticky Priority). Even if the latest message seems minor, 
-        the patient is still in an active emergency state.
+        
+        INVESTIGATION MANDATE:
+        If the triage level is 'routine' or 'urgent', you MUST generate 3-5 clinical follow-up 
+        questions to rule out life-threatening conditions (e.g., asking about fever, 
+        pain location, or associated symptoms). 
+        If the level is 'emergency', the 'questions' array should be empty as immediate action is required.
         """
 
         prompt = f"NEW PATIENT DATA: {json.dumps(structured_input)}"
@@ -57,7 +63,7 @@ class ClinicalTriageAgent:
                     system_instruction=system_instruction,
                     response_mime_type="application/json",
                     response_schema=triage_schema,
-                    temperature=0.0  # Zero temperature for maximum consistency
+                    temperature=0.0 
                 )
             )
 
@@ -65,10 +71,10 @@ class ClinicalTriageAgent:
 
             # --- THE FINAL GUARDRAIL (Python Level) ---
             if rule_result == "emergency":
-                # We force this even if Gemini got it right, just so we see the "LATCH" text
                 result["level"] = "emergency"
                 result["reasoning"] = f"EMERGENCY LATCH ACTIVE: {result.get('reasoning', '')}"
                 result["action"] = "IMMEDIATE EMERGENCY ACTION REQUIRED: Call 911/EMS."
+                result["questions"] = [] # Clear questions for emergency
             
             return result
 
@@ -77,5 +83,6 @@ class ClinicalTriageAgent:
                 "level": rule_result if rule_result else "emergency",
                 "reasoning": f"Fail-safe triggered: {str(e)}",
                 "action": "Seek immediate medical consultation.",
+                "questions": ["Can you describe your symptoms in more detail?"],
                 "confidence_score": 0.0
             }
