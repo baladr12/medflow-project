@@ -27,6 +27,12 @@ st.markdown("""
         border-left: 5px solid #64FFDA;
         margin-bottom: 20px;
     }
+    .question-box {
+        background-color: #1e3a5f;
+        padding: 10px;
+        border-radius: 8px;
+        margin-top: 10px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -37,36 +43,25 @@ def load_latest_engine():
     """Auto-discovers and wraps the latest MedFlow engine based on display name."""
     project = os.getenv("GCP_PROJECT_ID")
     location = os.getenv("GCP_LOCATION", "us-central1")
-    
-    # This MUST match the display_name in your engine.py exactly
     target_display_name = "MedFlow_FORCE_FINAL_VERSION"
 
     vertexai.init(project=project, location=location)
 
     try:
-        # 1. Fetch all deployed engines
         engines = reasoning_engines.ReasoningEngine.list()
-        
-        # 2. Filter for our specific engine name
         matches = [e for e in engines if e.display_name == target_display_name]
         
         if not matches:
-            st.error(f"❌ No engine found with name '{target_display_name}'. Please check your deployment logs.")
+            st.error(f"❌ No engine found with name '{target_display_name}'.")
             return None
 
-        # 3. Sort by creation time to get the absolute latest version
         matches.sort(key=lambda x: x.create_time, reverse=True)
         latest_resource = matches[0]
-        
-        # 4. Extract deployment time for the Version Tag
         deployed_at = latest_resource.create_time.strftime("%b %d, %I:%M %p")
-        
-        # 5. Wrap the resource into an executable object
         executable_engine = reasoning_engines.ReasoningEngine(latest_resource.resource_name)
         
-        # Sidebar Status Updates
         st.sidebar.success(f"Connected: {latest_resource.display_name}")
-        st.sidebar.info(f"📅 Deployed: {deployed_at}") # <--- VERSION TAG ADDED
+        st.sidebar.info(f"📅 Deployed: {deployed_at}")
         st.sidebar.caption(f"Resource: ...{latest_resource.resource_name[-8:]}")
         st.sidebar.caption(f"Patient Session: {st.session_state.patient_id}")
         
@@ -79,24 +74,20 @@ def load_latest_engine():
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display Chat History
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# User Input
 if prompt := st.chat_input("How are you feeling today?"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.spinner("Clinical Agents are reviewing your case..."):
-        # Discovery happens here automatically
         engine = load_latest_engine()
         
         if engine:
             try:
-                # Execute query on the cloud engine
                 response = engine.query(
                     message=prompt, 
                     consent=True, 
@@ -138,19 +129,26 @@ if prompt := st.chat_input("How are you feeling today?"):
                                 st.write("No acute red flags detected.")
                         st.markdown('</div>', unsafe_allow_html=True)
 
-                    # 3. Actionable Advice
-                    advice = response.get('follow_up', {}).get('safety_net_advice', 'Follow standard protocols.')
+                    # 3. Actionable Advice & Follow-up Questions
+                    follow_up_data = response.get('follow_up', {})
+                    advice = follow_up_data.get('safety_net_advice', 'Follow standard protocols.')
                     st.warning(f"**Immediate Action Required:** {advice}")
-                    
+
+                    # --- NEW: FOLLOW-UP QUESTIONS SECTION ---
+                    questions = follow_up_data.get('questions_to_ask', [])
+                    if questions:
+                        st.subheader("🙋 Questions to Answer")
+                        for q in questions:
+                            st.info(f"**Patient Follow-up:** {q}")
+
                     # 4. Metadata & Status
                     metadata = response.get('metadata', {})
                     st.caption(f"Status: {response.get('workflow_status')} | Latency: {metadata.get('latency')} | Trace: {metadata.get('trace_id')}")
 
-                    # 5. Developer Debugging (Checking GCS memory Latch)
+                    # 5. Developer Debugging
                     with st.expander("🔍 Raw Agent Response Data"):
                         st.json(response)
 
-                # Save assistant response to history
                 st.session_state.messages.append({
                     "role": "assistant", 
                     "content": f"**Triage:** {level}\n\n**Advice:** {advice}"
@@ -163,15 +161,8 @@ if prompt := st.chat_input("How are you feeling today?"):
 with st.sidebar:
     st.header("MedFlow Controls")
     if st.button("Clear Chat Session"):
-        # 1. Clear the messages
         st.session_state.messages = []
-        
-        # 2. DELETE the existing patient_id key entirely
         if "patient_id" in st.session_state:
             del st.session_state.patient_id
-        
-        # 3. Clear the cached engine resource (optional but cleaner)
         st.cache_resource.clear()
-        
-        # 4. Rerun (The script will restart and generate a NEW ID at the top)
         st.rerun()
