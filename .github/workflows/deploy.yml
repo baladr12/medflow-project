@@ -50,14 +50,15 @@ jobs:
 
       - name: Run Deployment Script
         env:
-          # Use Secrets for security and environment flexibility
           GCP_PROJECT_ID: "${{ secrets.GCP_PROJECT_ID }}"
           GCP_LOCATION: "${{ secrets.GCP_LOCATION }}"
           GCS_MEMORY_BUCKET: "${{ secrets.GCS_MEMORY_BUCKET }}"
-          # You can keep these as env vars or move to secrets if they vary by branch
+          # THIS IS THE MISSING PIECE:
+          GCP_SERVICE_ACCOUNT: "${{ secrets.GCP_SERVICE_ACCOUNT }}" 
+          
           BQ_DATASET_ID: "clinical_records"
           BQ_TABLE_ID: "triage_cases"
           GEMINI_MODEL: "gemini-2.0-flash"
         run: |
-          # We call engine.py which contains your reasoning_engines.ReasoningEngine.create logic
+          # We call engine.py which contains your reasoning_engines.ReasoningEngine.create logic  
           python engine.py

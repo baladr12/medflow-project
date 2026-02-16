@@ -180,13 +180,16 @@ if __name__ == "__main__":
         remote_app = reasoning_engines.ReasoningEngine.create(
             engine_instance,
             requirements=[
-                "google-genai",
+                "google-genai>=0.8.0",
                 "google-cloud-aiplatform[reasoningengine,preview]",
+                "google-cloud-logging",
                 "google-cloud-bigquery",
                 "google-cloud-storage",
-                "google-cloud-logging",
+                "google-auth",
+                "pydantic",
                 "python-dotenv",
-                "pydantic"
+                "cloudpickle",
+                "requests"
             ],
             display_name="MedFlow_LATCH_FORCE_NEW", # Changed name to bypass cache
             extra_packages=["agents", "tools", "memory", "observability"],

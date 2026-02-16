@@ -1,26 +1,44 @@
 # --- Google Cloud & AI SDKs ---
-# Gemini 2.0 SDK (The Brain)
+
+# The Brain: Interface for Gemini 2.0 Flash
 google-genai>=0.8.0
-# Vertex AI Platform SDK (The Engine)
-# Using [reasoningengine] ensures all ADK dependencies are included
+
+# The Engine: Core SDK for Vertex AI Reasoning Engine
+# Includes specific dependencies for packaging cloud agents
 google-cloud-aiplatform[reasoningengine,preview]
-# For the Observability Manager & Cloud Operations
+
+# Observability: Streams logs and traces to Google Cloud Logging
 google-cloud-logging
-# For EHR Persistence (BigQuery)
+
+# Database: For the Workflow Agent to interact with BigQuery (EHR)
 google-cloud-bigquery
-# For Memory Storage (GCS)
+
+# Memory Storage: For persisting patient sessions to GCS buckets
 google-cloud-storage
-# For secure authentication
+
+# Identity: Manages Service Account credentials for cloud access
 google-auth
 
-# --- Core Framework & Validation ---
+
+# --- Core Framework & Serialization ---
+
+# Data Validation: Structuring JSON payloads between agents
 pydantic
+
+# Configuration: Loading Project/Bucket variables from environment
 python-dotenv
 
-# --- Concurrency & Networking ---
-# Essential for gevent worker class in custom environments
-#gevent>=24.10.1
-#greenlet
+# Packaging: Essential for Vertex AI to serialize your Python classes
+cloudpickle
+
+
+# --- Frontend & Networking ---
+
+# UI Framework: Used for the MedFlow Clinical Dashboard demo
+streamlit
+
+# API Communication: For external tool calls and networking
+requests
 
 # --- Frontend (Optional - for Demo UI) ---
 streamlit
