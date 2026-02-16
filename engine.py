@@ -4,7 +4,7 @@ from vertexai.preview import reasoning_engines
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-# Load local environment for development
+# Ensure environment is loaded before anything else
 load_dotenv()
 
 class MedFlowReasoningEngine:
@@ -14,7 +14,6 @@ class MedFlowReasoningEngine:
     """
 
     def __init__(self):
-        # Configuration pulled from deployment or env
         self.project = os.getenv("GCP_PROJECT_ID")
         self.location = os.getenv("GCP_LOCATION", "us-central1")
         self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
@@ -34,11 +33,10 @@ class MedFlowReasoningEngine:
         self.mem_store = None
 
     def _setup(self):
-        """Initializes agents and tools in the cloud environment."""
+        """Initializes agents and tools with forced cloud context."""
         if self.client is not None:
             return
 
-        # Ensure project variables are set for Google Cloud Clients
         if self.project:
             os.environ["GCP_PROJECT_ID"] = self.project
             os.environ["GOOGLE_CLOUD_PROJECT"] = self.project
@@ -64,17 +62,12 @@ class MedFlowReasoningEngine:
             credentials=credentials
         )
 
-        # 1. Initialize Stores
+        # 1. Initialize Stores & Link Bucket
         self.ehr = EHRStore()         
         self.mem_store = MemoryStore()
-        
-        # --- THE MEMORY FIX ---
-        # Force the bucket name into the MemoryStore so it points to the correct GCS location
         if self.bucket_name:
             self.mem_store.bucket_name = self.bucket_name
-            print(f"DEBUG: MemoryStore linked to bucket: {self.bucket_name}")
-        # ----------------------
-
+        
         # 2. Initialize Agents
         self.intake = PatientUnderstandingAgent(self.client)
         self.triage = ClinicalTriageAgent(self.client)
@@ -91,7 +84,6 @@ class MedFlowReasoningEngine:
 
         project_id = self.project or os.getenv("GCP_PROJECT_ID")
         if not project_id: return
-
         bq_client = bigquery.Client(project=project_id)
         full_dataset_id = f"{project_id}.{self.dataset_id}"
         
@@ -101,56 +93,43 @@ class MedFlowReasoningEngine:
             dataset = bigquery.Dataset(full_dataset_id)
             dataset.location = self.location
             bq_client.create_dataset(dataset, timeout=30)
-        except Exception as e:
-            print(f"⚠️ Infra Warning: {e}")
+        except Exception: pass
 
     def query(self, message: str, consent: bool = False, patient_id: str = "anonymous"):
         """Main cloud execution with State-Aware Triage."""
         self._setup()
-        
         trace_id = self.obs.start_request()
         start_timer = self.obs.start_timer()
 
         try:
-            # 1. LOAD PATIENT HISTORY
+            # 1. LOAD PATIENT HISTORY (The Sticky Latch Source)
             self.mem_store.blob_name = f"{patient_id}.json"
             history = self.mem_store.load() 
-
-            # Standardize priority for the logic latch
+            
+            # Use .get() with a default 'routine' and strip white space
             prev_priority = str(history.get("last_triage_level", "routine")).lower().strip()
             
-            print(f"DEBUG: Memory for {patient_id} loaded. Value: {prev_priority}")
-            self.obs.add_trace("MemoryStore", f"Patient: {patient_id} | Memory Load: {prev_priority}")
+            self.obs.add_trace("MemoryStore", f"Load: {prev_priority} for {patient_id}")
 
             # 2. EXTRACTION
-            self.obs.add_trace("IntakeAgent", "Analyzing clinical input")
             extracted_data = self.intake.analyse(message)
             
-            # --- THE AGGRESSIVE INJECTION ---
+            # 3. TRIAGE (Injecting the previous priority into the tool payload)
             triage_payload = {**extracted_data} 
             triage_payload["previous_priority"] = prev_priority
             
-            # 3. TRIAGE (Sticky Priority Check inside this agent)
-            self.obs.add_trace("TriageAgent", f"Calculating priority (Context: {prev_priority})")
             triage_results = self.triage.triage(triage_payload)
             new_level = triage_results.get("level", "routine")
             
             # 4. SUMMARY
-            self.obs.add_trace("SummaryAgent", "Synthesizing clinical note")
             clinician_summary = self.summary.create_summary(triage_payload, triage_results)
             
-            # 5. PERSISTENCE & MEMORY UPDATE
+            # 5. PERSISTENCE (Update memory with the new level)
             history["last_triage_level"] = new_level
-            print(f"DEBUG: Attempting to save '{new_level}' to {self.mem_store.blob_name}")
             self.mem_store.save(history) 
-
-            # VERIFICATION LOG (Crucial for debugging the 'None' issue)
-            verify_history = self.mem_store.load()
-            print(f"DEBUG: Verification load result: {verify_history.get('last_triage_level')}")
 
             workflow_outcome = "Logged"
             if consent:
-                self.obs.add_trace("WorkflowAgent", "Persisting to EHR")
                 prepared_case = self.workflow.prepare_case(triage_payload, triage_results, clinician_summary)
                 save_result = self.workflow.confirm_and_save(prepared_case, consent=True)
                 workflow_outcome = save_result.get("status", "Saved")
@@ -161,7 +140,7 @@ class MedFlowReasoningEngine:
                 "triage": triage_results,
                 "clinical_summary": clinician_summary,
                 "follow_up": {
-                    "safety_net_advice": triage_results.get('action', 'Seek medical review if symptoms persist.')
+                    "safety_net_advice": triage_results.get('action', 'Seek medical review.')
                 },
                 "workflow_status": workflow_outcome,
                 "metadata": {
@@ -173,19 +152,21 @@ class MedFlowReasoningEngine:
             }
         except Exception as e:
             if self.obs: self.obs.error(f"Pipeline Error: {str(e)}")
-            return {"status": "error", "message": f"Cloud Pipeline Error: {str(e)}"}
+            return {"status": "error", "message": str(e)}
 
 # --- DEPLOYMENT SCRIPT ---
 if __name__ == "__main__":
     PROJECT_ID = os.getenv("GCP_PROJECT_ID")
     LOCATION = os.getenv("GCP_LOCATION", "us-central1")
     STAGING_BUCKET = os.getenv("GCS_MEMORY_BUCKET")
-    # NEW: Pull the service account from env
     SERVICE_ACCOUNT = os.getenv("GCP_SERVICE_ACCOUNT")
 
-    if not all([PROJECT_ID, STAGING_BUCKET, SERVICE_ACCOUNT]):
-        print("❌ Error: Missing configuration in .env (Project, Bucket, or Service Account)")
-        exit(1)
+    # Final validation check
+    required = {"Project": PROJECT_ID, "Bucket": STAGING_BUCKET, "Service Account": SERVICE_ACCOUNT}
+    for label, val in required.items():
+        if not val:
+            print(f"❌ Error: {label} is missing from .env")
+            exit(1)
 
     vertexai.init(project=PROJECT_ID, location=LOCATION, staging_bucket=f"gs://{STAGING_BUCKET}")
 
@@ -193,8 +174,7 @@ if __name__ == "__main__":
     engine_instance.project = PROJECT_ID
     engine_instance.bucket_name = STAGING_BUCKET
 
-    print(f"🚀 Deploying MedFlow v21 Final Latch to {PROJECT_ID}...")
-    print(f"🚀 Deploying with Service Account: {SERVICE_ACCOUNT}")
+    print(f"🚀 Deploying v21 LATCH_FIX to {PROJECT_ID}...")
 
     try:
         remote_app = reasoning_engines.ReasoningEngine.create(
@@ -208,9 +188,8 @@ if __name__ == "__main__":
                 "python-dotenv",
                 "pydantic"
             ],
-            display_name="MedFlow_DYNAMIC_SA_DEPLOY",
+            display_name="MedFlow_LATCH_FORCE_NEW", # Changed name to bypass cache
             extra_packages=["agents", "tools", "memory", "observability"],
-            # DYNAMIC INJECTION
             service_account=SERVICE_ACCOUNT
         )
         print(f"✅ Deployed Successfully: {remote_app.resource_name}")
