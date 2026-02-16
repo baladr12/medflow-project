@@ -205,7 +205,7 @@ if __name__ == "__main__":
                 "python-dotenv",
                 "pydantic"
             ],
-            display_name="MedFlow_LATCH_FIX_V1",
+            display_name="MedFlow_V21_FINAL_FORCE_PATCH_01",
             extra_packages=["agents", "tools", "memory", "observability"],
         )
         print(f"✅ Deployed Successfully: {remote_app.resource_name}")
