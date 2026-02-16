@@ -175,28 +175,41 @@ if __name__ == "__main__":
     engine_instance.bucket_name = STAGING_BUCKET
 
     print(f"🚀 Deploying v21 LATCH_FIX to {PROJECT_ID}...")
+    
+    # Define common requirements once
+    REQS = [
+        "google-genai>=0.8.0",
+        "google-cloud-aiplatform[reasoningengine,preview]",
+        "google-cloud-logging",
+        "google-cloud-bigquery",
+        "google-cloud-storage",
+        "google-auth",
+        "pydantic",
+        "python-dotenv",
+        "cloudpickle",
+        "requests"
+    ]
 
     try:
         remote_app = reasoning_engines.ReasoningEngine.create(
             engine_instance,
-            requirements=[
-                "google-genai>=0.8.0",
-                "google-cloud-aiplatform[reasoningengine,preview]",
-                "google-cloud-logging",
-                "google-cloud-bigquery",
-                "google-cloud-storage",
-                "google-auth",
-                "pydantic",
-                "python-dotenv",
-                "cloudpickle",
-                "requests"
-            ],
-            display_name="MedFlow_LATCH_FORCE_NEW_V2", # Changed name to bypass cache
+            requirements=REQS,
+            display_name="MedFlow_LATCH_FORCE_NEW_FINAL", # Changed name to bypass cache
             extra_packages=["agents", "tools", "memory", "observability"],
-            service_account_spec={
-                "service_account": SERVICE_ACCOUNT
-            }
+            service_account=SERVICE_ACCOUNT
         )
         print(f"✅ Deployed Successfully: {remote_app.resource_name}")
-    except Exception as e:
-        print(f"❌ Deployment Failed: {str(e)}")
+    except TypeError as e:
+        if "unexpected keyword argument 'service_account'" in str(e):
+            print("⚠️ Direct 'service_account' failed, attempting with no identity (uses runner default)...")
+            # FALLBACK: If the SDK is in a strict environment, let it inherit the 
+            # identity from the GitHub Action's authenticated session.
+            remote_app = reasoning_engines.ReasoningEngine.create(
+                engine_instance,
+                requirements=REQS,
+                display_name="MedFlow_LATCH_FORCE_FINAL_AUTO",
+                extra_packages=["agents", "tools", "memory", "observability"]
+            )
+            print(f"✅ Deployed Successfully (Auto-Identity): {remote_app.resource_name}")
+        else:
+            raise e
