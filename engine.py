@@ -191,9 +191,11 @@ if __name__ == "__main__":
                 "cloudpickle",
                 "requests"
             ],
-            display_name="MedFlow_LATCH_FORCE_NEW", # Changed name to bypass cache
+            display_name="MedFlow_LATCH_FORCE_NEW_V2", # Changed name to bypass cache
             extra_packages=["agents", "tools", "memory", "observability"],
-            service_account=SERVICE_ACCOUNT
+            service_account_spec={
+                "service_account": SERVICE_ACCOUNT
+            }
         )
         print(f"✅ Deployed Successfully: {remote_app.resource_name}")
     except Exception as e:
