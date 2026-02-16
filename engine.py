@@ -67,6 +67,7 @@ class MedFlowReasoningEngine:
         self.mem_store = MemoryStore()
         if self.bucket_name:
             self.mem_store.bucket_name = self.bucket_name
+            print(f"DEBUG: Manually synced bucket {self.bucket_name} to MemoryStore")
         
         # 2. Initialize Agents
         self.intake = PatientUnderstandingAgent(self.client)
@@ -225,7 +226,7 @@ if __name__ == "__main__":
             remote_app = reasoning_engines.ReasoningEngine.create(
                 engine_instance,
                 requirements=REQS,
-                display_name="MedFlow_LATCH_FORCE_FINAL_AUTO_V1",
+                display_name="MedFlow_FORCE_FINAL_VERSION", # Changed name again to ensure no caching
                 extra_packages=["agents", "tools", "memory", "observability"]
             )
             print(f"✅ Deployed Successfully (Auto-Identity): {remote_app.resource_name}")
