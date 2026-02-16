@@ -4,15 +4,9 @@ from vertexai.preview import reasoning_engines
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-# Ensure environment is loaded before anything else
 load_dotenv()
 
 class MedFlowReasoningEngine:
-    """
-    MedFlow v21: Enterprise Clinical Reasoning Engine.
-    Features: 7-Agent Orchestration, Observability, and Sticky Triage Memory.
-    """
-
     def __init__(self):
         self.project = os.getenv("GCP_PROJECT_ID")
         self.location = os.getenv("GCP_LOCATION", "us-central1")
@@ -21,7 +15,6 @@ class MedFlowReasoningEngine:
         self.dataset_id = "clinical_records"
         self.table_id = "triage_cases"
         
-        # Object placeholders
         self.client = None
         self.obs = None
         self.intake = None
@@ -33,17 +26,12 @@ class MedFlowReasoningEngine:
         self.mem_store = None
 
     def _setup(self):
-        """Initializes agents and tools with forced cloud context."""
-        if self.client is not None:
-            return
-
-        if self.project:
-            os.environ["GCP_PROJECT_ID"] = self.project
-            os.environ["GOOGLE_CLOUD_PROJECT"] = self.project
+        if self.client is not None: return
 
         from google import genai
         from google.auth import default
         
+        # ONLY your existing agents
         from agents.patient_understanding import PatientUnderstandingAgent
         from agents.clinical_triage import ClinicalTriageAgent
         from agents.clinical_summary import ClinicalSummaryAgent
@@ -62,14 +50,11 @@ class MedFlowReasoningEngine:
             credentials=credentials
         )
 
-        # 1. Initialize Stores & Link Bucket
         self.ehr = EHRStore()         
         self.mem_store = MemoryStore()
         if self.bucket_name:
             self.mem_store.bucket_name = self.bucket_name
-            print(f"DEBUG: Manually synced bucket {self.bucket_name} to MemoryStore")
         
-        # 2. Initialize Agents
         self.intake = PatientUnderstandingAgent(self.client)
         self.triage = ClinicalTriageAgent(self.client)
         self.summary = ClinicalSummaryAgent(self.client)
@@ -79,15 +64,12 @@ class MedFlowReasoningEngine:
         self._initialize_infrastructure()
 
     def _initialize_infrastructure(self):
-        """Ensures BigQuery resources exist."""
         from google.cloud import bigquery
         from google.api_core import exceptions
-
         project_id = self.project or os.getenv("GCP_PROJECT_ID")
         if not project_id: return
         bq_client = bigquery.Client(project=project_id)
         full_dataset_id = f"{project_id}.{self.dataset_id}"
-        
         try:
             bq_client.get_dataset(full_dataset_id)
         except exceptions.NotFound:
@@ -97,55 +79,37 @@ class MedFlowReasoningEngine:
         except Exception: pass
 
     def query(self, message: str, consent: bool = False, patient_id: str = "anonymous"):
-        """Main cloud execution with State-Aware Triage and GCS Debugging."""
         self._setup()
         trace_id = self.obs.start_request()
         start_timer = self.obs.start_timer()
 
-        print(f"DEBUG [START]: Query for patient {patient_id}")
-        print(f"DEBUG [CONFIG]: Target Bucket: {self.bucket_name}")
-
         try:
-            # 1. LOAD PATIENT HISTORY
-            self.mem_store.blob_name = f"sessions/{patient_id}.json" # Added 'sessions/' prefix
-            
+            # 1. Memory Load
+            self.mem_store.blob_name = f"sessions/{patient_id}.json"
             try:
                 history = self.mem_store.load() 
-                print(f"DEBUG [MEMORY]: Load successful for {patient_id}")
-            except Exception as load_err:
-                print(f"DEBUG [MEMORY]: No existing session found or error: {str(load_err)}")
+            except Exception:
                 history = {}
 
-            # Get previous priority
             prev_priority = str(history.get("last_triage_level", "routine")).lower().strip()
-            print(f"DEBUG [STATE]: Previous priority was: {prev_priority}")
-            
-            self.obs.add_trace("MemoryStore", f"Load: {prev_priority} for {patient_id}")
 
-            # 2. EXTRACTION
+            # 2. Analysis
             extracted_data = self.intake.analyse(message)
             
-            # 3. TRIAGE
+            # 3. Triage
             triage_payload = {**extracted_data} 
             triage_payload["previous_priority"] = prev_priority
-            
             triage_results = self.triage.triage(triage_payload)
-            new_level = triage_results.get("level", "routine")
-            print(f"DEBUG [STATE]: New triage level calculated: {new_level}")
             
-            # 4. SUMMARY
+            # 4. Summary
             clinician_summary = self.summary.create_summary(triage_payload, triage_results)
             
-            # 5. PERSISTENCE (Update and Save)
+            # 5. Save State
+            new_level = triage_results.get("level", "routine")
             history["last_triage_level"] = new_level
-            
-            try:
-                self.mem_store.save(history) 
-                print(f"DEBUG [SAVE]: Successfully saved {new_level} to gs://{self.bucket_name}/sessions/{patient_id}.json")
-            except Exception as save_err:
-                print(f"❌ DEBUG [SAVE ERROR]: FAILED to write to GCS: {str(save_err)}")
+            self.mem_store.save(history) 
 
-            # 6. WORKFLOW
+            # 6. Workflow
             workflow_outcome = "Logged"
             if consent:
                 prepared_case = self.workflow.prepare_case(triage_payload, triage_results, clinician_summary)
@@ -154,11 +118,14 @@ class MedFlowReasoningEngine:
 
             latency = self.obs.stop_timer(start_timer)
             
+            # --- THE FIX IS HERE ---
             return {
                 "triage": triage_results,
                 "clinical_summary": clinician_summary,
                 "follow_up": {
-                    "safety_net_advice": triage_results.get('action', 'Seek medical review.')
+                    "safety_net_advice": triage_results.get('action', 'Seek medical review.'),
+                    # This ensures the UI sees the questions list
+                    "questions_to_ask": triage_results.get('questions', []) 
                 },
                 "workflow_status": workflow_outcome,
                 "metadata": {
@@ -169,7 +136,6 @@ class MedFlowReasoningEngine:
                 }
             }
         except Exception as e:
-            print(f"❌ CRITICAL: Pipeline Crashed: {str(e)}")
             if self.obs: self.obs.error(f"Pipeline Error: {str(e)}")
             return {"status": "error", "message": str(e)}
 
@@ -180,22 +146,12 @@ if __name__ == "__main__":
     STAGING_BUCKET = os.getenv("GCS_MEMORY_BUCKET")
     SERVICE_ACCOUNT = os.getenv("GCP_SERVICE_ACCOUNT")
 
-    # Final validation check
-    required = {"Project": PROJECT_ID, "Bucket": STAGING_BUCKET, "Service Account": SERVICE_ACCOUNT}
-    for label, val in required.items():
-        if not val:
-            print(f"❌ Error: {label} is missing from .env")
-            exit(1)
-
     vertexai.init(project=PROJECT_ID, location=LOCATION, staging_bucket=f"gs://{STAGING_BUCKET}")
 
     engine_instance = MedFlowReasoningEngine()
     engine_instance.project = PROJECT_ID
     engine_instance.bucket_name = STAGING_BUCKET
 
-    print(f"🚀 Deploying v21 LATCH_FIX to {PROJECT_ID}...")
-    
-    # Define common requirements once
     REQS = [
         "google-genai>=0.8.0",
         "google-cloud-aiplatform[reasoningengine,preview]",
@@ -209,26 +165,11 @@ if __name__ == "__main__":
         "requests"
     ]
 
-    try:
-        remote_app = reasoning_engines.ReasoningEngine.create(
-            engine_instance,
-            requirements=REQS,
-            display_name="MedFlow_LATCH_FORCE_NEW_FINAL", # Changed name to bypass cache
-            extra_packages=["agents", "tools", "memory", "observability"],
-            service_account=SERVICE_ACCOUNT
-        )
-        print(f"✅ Deployed Successfully: {remote_app.resource_name}")
-    except TypeError as e:
-        if "unexpected keyword argument 'service_account'" in str(e):
-            print("⚠️ Direct 'service_account' failed, attempting with no identity (uses runner default)...")
-            # FALLBACK: If the SDK is in a strict environment, let it inherit the 
-            # identity from the GitHub Action's authenticated session.
-            remote_app = reasoning_engines.ReasoningEngine.create(
-                engine_instance,
-                requirements=REQS,
-                display_name="MedFlow_FORCE_FINAL_VERSION", # Changed name again to ensure no caching
-                extra_packages=["agents", "tools", "memory", "observability"]
-            )
-            print(f"✅ Deployed Successfully (Auto-Identity): {remote_app.resource_name}")
-        else:
-            raise e
+    remote_app = reasoning_engines.ReasoningEngine.create(
+        engine_instance,
+        requirements=REQS,
+        display_name="MedFlow_FORCE_FINAL_VERSION",
+        extra_packages=["agents", "tools", "memory", "observability"],
+        service_account=SERVICE_ACCOUNT
+    )
+    print(f"✅ Deployed Successfully: {remote_app.resource_name}")
