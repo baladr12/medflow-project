@@ -87,5 +87,41 @@ JSON
     "latency": "4.09s"
   }
 }
+
+
+graph TD
+    %% User Layer
+    User((Patient/Clinician)) -->|Input| Streamlit[Streamlit Frontend]
+    
+    %% Orchestration Layer
+    subgraph "Google Cloud Platform (Vertex AI)"
+        Streamlit -->|gRPC/REST| RE[Reasoning Engine Runtime]
+        RE -->|System Prompt| Gemini[Gemini 2.0 Flash]
+        
+        subgraph "7-Agent Pipeline"
+            Gemini --> Triage[Triage Agent]
+            Gemini --> Extract[Extraction Agent]
+            Gemini --> Safety[Safety Guardrail]
+        end
+    end
+
+    %% Persistence Layer
+    subgraph "Data & State"
+        RE <-->|Sticky Latch| GCS[(Cloud Storage: Session State)]
+        RE -->|InsertRow| BQ[(BigQuery: Clinical Records)]
+    end
+
+    %% Identity Layer
+    IAM[IAM: medflow-ai-runner] -.->|Permissions| RE
+    IAM -.->|Access| BQ
+    IAM -.->|Access| GCS
+
+    %% Styling
+    style RE fill:#4285F4,color:#fff
+    style Gemini fill:#34A853,color:#fff
+    style BQ fill:#FBBC05,color:#000
+    style GCS fill:#EA4335,color:#fff
+
+    
 📜 Disclaimer
 MedFlow is a Clinical Decision Support (CDS) tool. It is intended for healthcare professional use or as a screening aid. It does not provide medical diagnoses or replace the judgment of a licensed physician. In case of a real medical emergency, users should contact emergency services (911) immediately.
