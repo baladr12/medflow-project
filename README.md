@@ -267,7 +267,7 @@ MedFlow is a **Clinical Decision Support (CDS)** tool intended for healthcare pr
 
 Built by **Devi Rajendran**
 
-- 📄 [Full architecture article on Medium]([https://medium.com/@balarajendran12](https://medium.com/@balarajendran12/beyond-the-chatbot-engineering-a-multi-agent-clinical-reasoning-engine-on-vertex-ai-7e4872de99c4))
+- 📄 [Full architecture article on Medium](https://medium.com/@balarajendran12](https://medium.com/@balarajendran12/beyond-the-chatbot-engineering-a-multi-agent-clinical-reasoning-engine-on-vertex-ai-7e4872de99c4)
 - 💼 [LinkedIn](www.linkedin.com/in/devi-rajendran)
 - 🔗 [GitHub](https://github.com/baladr12/medflow-project)
 
