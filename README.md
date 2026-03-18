@@ -3,7 +3,6 @@
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![Vertex AI](https://img.shields.io/badge/Vertex%20AI-Reasoning%20Engine-4285F4.svg)](https://cloud.google.com/vertex-ai)
 [![Gemini](https://img.shields.io/badge/Gemini-2.0%20Flash-34A853.svg)](https://deepmind.google/technologies/gemini/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Active-brightgreen.svg)]()
 
 > **MedFlow is not a medical chatbot. It is a State-Aware Clinical Reasoning Engine.**
